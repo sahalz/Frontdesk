@@ -358,6 +358,38 @@ export function updateTicketStatus(db, ticketId, newStatus, actorId, actorName =
     }
   }
 
+  // Handling Reopened status from Resolved:
+  // Exclude time spent in Resolved state (treat as paused working time) so that a ticket
+  // sitting Resolved for several days before reopening is not immediately marked late.
+  let resolutionBreached = ticket.resolution_breached;
+  if (ticket.status === 'Resolved' && newStatus === 'Reopened') {
+    if (ticket.resolved_at) {
+      const resolvedStart = new Date(ticket.resolved_at);
+      const resolvedWorkingMinutes = calculateElapsedWorkingMinutes(resolvedStart, now, holidays);
+
+      const intervalId = `psi-${randomUUID()}`;
+      db.prepare(`
+        INSERT INTO sla_pause_intervals (id, ticket_id, paused_at, resumed_at, working_minutes_paused)
+        VALUES (?, ?, ?, ?, ?)
+      `).run(intervalId, ticketId, ticket.resolved_at, nowIso, resolvedWorkingMinutes);
+
+      if (resolvedWorkingMinutes > 0) {
+        totalPaused += resolvedWorkingMinutes;
+        resolutionDeadline = addWorkingMinutes(resolutionDeadline, resolvedWorkingMinutes, holidays);
+        if (!ticket.first_public_reply_at) {
+          responseDeadline = addWorkingMinutes(responseDeadline, resolvedWorkingMinutes, holidays);
+        }
+      }
+
+      // If the ticket was resolved within deadline initially, reopening with paused time excluded
+      // preserves the on-time status if current time is within the new extended resolution deadline.
+      if (nowIso <= resolutionDeadline.toISOString() && new Date(ticket.resolved_at) <= new Date(ticket.resolution_deadline)) {
+        resolutionBreached = 0;
+      }
+    }
+    resolvedAt = null;
+  }
+
   // Handling Closed status
   if (newStatus === 'Closed') {
     closedAt = nowIso;
@@ -370,6 +402,7 @@ export function updateTicketStatus(db, ticketId, newStatus, actorId, actorName =
         total_paused_minutes = ?,
         response_deadline = ?,
         resolution_deadline = ?,
+        resolution_breached = ?,
         resolved_at = ?,
         closed_at = ?,
         updated_at = ?
@@ -380,6 +413,7 @@ export function updateTicketStatus(db, ticketId, newStatus, actorId, actorName =
     totalPaused,
     responseDeadline.toISOString(),
     resolutionDeadline.toISOString(),
+    resolutionBreached,
     resolvedAt,
     closedAt,
     nowIso,

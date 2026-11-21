@@ -119,3 +119,24 @@ DROP TRIGGER IF EXISTS trg_prevent_audit_logs_delete ON audit_logs;
 CREATE TRIGGER trg_prevent_audit_logs_delete
 BEFORE DELETE ON audit_logs
 FOR EACH ROW EXECUTE FUNCTION prevent_modification();
+
+-- -----------------------------------------------------------------------------
+-- Production Hardening: Role-Based Privilege Revocation (NFR-3)
+-- -----------------------------------------------------------------------------
+-- While triggers prevent application-level UPDATE and DELETE statements in runtime queries,
+-- a database role with DDL or table ownership privileges could theoretically drop or disable
+-- triggers.
+-- For defense-in-depth, configure a dedicated application runtime role (e.g. frontdesk_app)
+-- that explicitly lacks UPDATE, DELETE, and TRIGGER rights on append-only tables:
+--
+-- CREATE ROLE frontdesk_app WITH LOGIN PASSWORD 'change_this_in_production';
+-- GRANT CONNECT ON DATABASE frontdesk_db TO frontdesk_app;
+-- GRANT USAGE ON SCHEMA public TO frontdesk_app;
+--
+-- GRANT SELECT, INSERT, UPDATE ON tickets, sla_pause_intervals, config_sla, holidays TO frontdesk_app;
+-- GRANT SELECT, INSERT ON messages, audit_logs TO frontdesk_app;
+--
+-- Explicitly ensure UPDATE and DELETE privileges are revoked:
+-- REVOKE UPDATE, DELETE, TRUNCATE, TRIGGER ON messages FROM frontdesk_app;
+-- REVOKE UPDATE, DELETE, TRUNCATE, TRIGGER ON audit_logs FROM frontdesk_app;
+-- -----------------------------------------------------------------------------

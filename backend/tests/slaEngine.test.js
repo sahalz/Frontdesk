@@ -178,3 +178,31 @@ test('SLA Engine - Reopen Window (5 working days)', () => {
   assert.equal(isWithinReopenWindow(resolvedAt, withinWindow), true);
   assert.equal(isWithinReopenWindow(resolvedAt, outsideWindow), false);
 });
+
+test('SLA Engine - Reopening a resolved ticket extends resolution deadline by time spent in Resolved', () => {
+  // Ticket created on Monday 10:00 as Medium priority (3 working days = Thursday 10:00 resolution deadline)
+  const mon1000 = makeUtcFromIst(2026, 11, 16, 10 * 60, 0);
+  const { resolutionDeadline } = calculateInitialDeadlines(mon1000, 'medium');
+
+  // Resolved early on Tuesday 12:00 (spent 11 hours working time, 16 hours left of the 27-hour SLA)
+  const tue1200 = makeUtcFromIst(2026, 11, 17, 12 * 60, 0);
+
+  // Sits resolved for 3 full working days until Friday 12:00
+  const fri1200 = makeUtcFromIst(2026, 11, 20, 12 * 60, 0);
+
+  // Elapsed working time while sitting in Resolved
+  const pausedWorkingMins = calculateElapsedWorkingMinutes(tue1200, fri1200);
+  assert.equal(pausedWorkingMins, 3 * 540, 'Should have paused for 3 working days (1620 mins)');
+
+  // Reopen extends resolution deadline by the 1620 minutes
+  const extendedDeadline = addWorkingMinutes(resolutionDeadline, pausedWorkingMins);
+
+  // Original deadline was Thursday 10:00; extended deadline must be 3 working days later (next Tuesday 10:00)
+  const extParts = getIstParts(extendedDeadline);
+  assert.equal(extParts.dateStr, '2026-11-24', 'Extended to next Tuesday');
+  assert.equal(extParts.hour, 10);
+  assert.equal(extParts.minute, 0);
+
+  // And at Friday 12:00 (reopen time), the extended deadline (Tue 10:00) has NOT passed
+  assert.ok(fri1200 < extendedDeadline, 'Reopened ticket must not be instantly late when resolved time is excluded');
+});
