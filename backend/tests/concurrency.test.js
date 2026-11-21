@@ -1,11 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createDatabase } from '../src/db.js';
+import { createTestDatabase } from './testDatabase.js';
 import { createApp } from '../src/server.js';
 import { createTicket } from '../src/services/ticketService.js';
 
-test('Concurrency & Claiming (FR-5, FR-6, NFR-5) - Exactly One Winner and HTTP 409 Conflict', async () => {
-  const db = createDatabase(':memory:');
+test('Concurrency & Claiming (FR-5, FR-6, NFR-5) - Exactly One Winner and HTTP 409 Conflict', async t => {
+  const db = await createTestDatabase();
+  t.after(() => db.close());
   const app = createApp(db);
 
   const server = app.listen(0);
@@ -14,7 +15,7 @@ test('Concurrency & Claiming (FR-5, FR-6, NFR-5) - Exactly One Winner and HTTP 4
 
   try {
     // Create an unassigned ticket
-    const ticket = createTicket(db, {
+    const ticket = await createTicket(db, {
       subject: 'Race condition test ticket',
       description: 'Two agents claim simultaneously',
       customerId: 'cust-1',
@@ -51,7 +52,7 @@ test('Concurrency & Claiming (FR-5, FR-6, NFR-5) - Exactly One Winner and HTTP 4
     assert.match(loserData.message, /already been claimed/i);
 
     // Verify ticket in DB is assigned to the winner
-    const updatedTicket = db.prepare('SELECT assigned_agent_id FROM tickets WHERE id = ?').get(ticket.id);
+    const updatedTicket = await db.prepare('SELECT assigned_agent_id FROM tickets WHERE id = ?').get(ticket.id);
     assert.ok(
       updatedTicket.assigned_agent_id === 'agent-1' || updatedTicket.assigned_agent_id === 'agent-2'
     );

@@ -13,12 +13,12 @@ export function createCustomerRouter(db) {
   const router = express.Router();
 
   // Authentication/Customer identification middleware
-  router.use((req, res, next) => {
+  router.use(async (req, res, next) => {
     const customerId = req.headers['x-user-id'] || req.query.customer_id;
     if (!customerId) {
       return res.status(401).json({ error: 'Customer identification required (x-user-id header)' });
     }
-    const user = db.prepare('SELECT * FROM users WHERE id = ?').get(customerId);
+    const user = await db.prepare('SELECT * FROM users WHERE id = ?').get(customerId);
     if (!user || user.role !== 'customer') {
       return res.status(403).json({ error: 'Unauthorized: valid customer role required' });
     }
@@ -27,13 +27,13 @@ export function createCustomerRouter(db) {
   });
 
   // Create ticket
-  router.post('/tickets', (req, res) => {
+  router.post('/tickets', async (req, res) => {
     const { subject, description, priority } = req.body;
     if (!subject || !description) {
       return res.status(400).json({ error: 'Subject and description are required' });
     }
 
-    const ticket = createTicket(db, {
+    const ticket = await createTicket(db, {
       subject,
       description,
       customerId: req.customer.id,
@@ -46,8 +46,8 @@ export function createCustomerRouter(db) {
   });
 
   // List customer's tickets
-  router.get('/tickets', (req, res) => {
-    const tickets = db.prepare(`
+  router.get('/tickets', async (req, res) => {
+    const tickets = await db.prepare(`
       SELECT * FROM tickets WHERE customer_id = ? ORDER BY created_at DESC
     `).all(req.customer.id);
 
@@ -57,8 +57,8 @@ export function createCustomerRouter(db) {
   });
 
   // Get single ticket details (Strict allowlist + public messages only)
-  router.get('/tickets/:id', (req, res) => {
-    const ticket = db.prepare('SELECT * FROM tickets WHERE id = ? AND customer_id = ?').get(
+  router.get('/tickets/:id', async (req, res) => {
+    const ticket = await db.prepare('SELECT * FROM tickets WHERE id = ? AND customer_id = ?').get(
       req.params.id,
       req.customer.id
     );
@@ -68,7 +68,7 @@ export function createCustomerRouter(db) {
     }
 
     // Direct database query for public messages only
-    const messages = getCustomerMessages(db, ticket.id);
+    const messages = await getCustomerMessages(db, ticket.id);
 
     res.json({
       ticket: serializeCustomerTicket(ticket),
@@ -77,13 +77,13 @@ export function createCustomerRouter(db) {
   });
 
   // Customer replies to ticket
-  router.post('/tickets/:id/reply', (req, res) => {
+  router.post('/tickets/:id/reply', async (req, res) => {
     const { content } = req.body;
     if (!content) {
       return res.status(400).json({ error: 'Message content is required' });
     }
 
-    const ticket = db.prepare('SELECT * FROM tickets WHERE id = ? AND customer_id = ?').get(
+    const ticket = await db.prepare('SELECT * FROM tickets WHERE id = ? AND customer_id = ?').get(
       req.params.id,
       req.customer.id
     );
@@ -92,7 +92,7 @@ export function createCustomerRouter(db) {
       return res.status(404).json({ error: 'Ticket not found or access denied' });
     }
 
-    const result = addCustomerReply(db, {
+    const result = await addCustomerReply(db, {
       ticketId: ticket.id,
       customerId: req.customer.id,
       content

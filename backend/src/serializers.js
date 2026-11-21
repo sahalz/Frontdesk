@@ -35,7 +35,7 @@ export function serializeCustomerTicket(ticket) {
  * NFR-2 & FR-10: Notes are NEVER fetched and filtered afterwards.
  * Only rows with type = 'public_reply' are retrieved from the DB.
  */
-export function getCustomerMessages(db, ticketId) {
+export async function getCustomerMessages(db, ticketId) {
   const stmt = db.prepare(`
     SELECT m.id, m.ticket_id, m.author_id, m.author_role, m.type, m.content, m.created_at, u.name as author_name
     FROM messages m
@@ -43,13 +43,13 @@ export function getCustomerMessages(db, ticketId) {
     WHERE m.ticket_id = ? AND m.type = 'public_reply'
     ORDER BY m.created_at ASC
   `);
-  return stmt.all(ticketId);
+  return await stmt.all(ticketId);
 }
 
 /**
  * Full agent message query (includes both public replies and internal notes)
  */
-export function getAgentMessages(db, ticketId) {
+export async function getAgentMessages(db, ticketId) {
   const stmt = db.prepare(`
     SELECT m.id, m.ticket_id, m.author_id, m.author_role, m.type, m.content, m.created_at, u.name as author_name
     FROM messages m
@@ -57,7 +57,7 @@ export function getAgentMessages(db, ticketId) {
     WHERE m.ticket_id = ?
     ORDER BY m.created_at ASC
   `);
-  return stmt.all(ticketId);
+  return await stmt.all(ticketId);
 }
 
 /**

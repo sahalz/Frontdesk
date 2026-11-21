@@ -13,86 +13,93 @@ import {
   isAutoCloseDue,
   isWithinReopenWindow
 } from '../slaEngine.js';
+import { inTransaction } from '../db.js';
 import { logAuditEvent } from '../auditLogger.js';
 
-export function getHolidaysList(db) {
-  const rows = db.prepare('SELECT date FROM holidays').all();
+export async function getHolidaysList(db) {
+  const rows = await db.prepare('SELECT date FROM holidays').all();
   return rows.map(r => r.date);
 }
 
 /**
  * Checks open tickets against current time to flag any new breaches.
  */
-export function evaluateLiveBreaches(db, holidays = null) {
-  if (!holidays) holidays = getHolidaysList(db);
+export async function evaluateLiveBreaches(db, ticketId = null) {
   const now = new Date();
   const nowIso = now.toISOString();
 
-  const tickets = db.prepare(`
+  const tickets = await db.prepare(`
     SELECT * FROM tickets 
     WHERE status NOT IN ('Resolved', 'Closed')
-  `).all();
+      AND id = COALESCE(?, id)
+  `).all(ticketId);
 
-  for (const t of tickets) {
-    let changed = false;
-    let respBreached = t.response_breached === 1;
-    let resBreached = t.resolution_breached === 1;
+  for (const candidate of tickets) {
+    await inTransaction(db, async tx => {
+      const t = await tx.prepare('SELECT * FROM tickets WHERE id = ? FOR UPDATE').get(candidate.id);
+      if (!t || t.status === 'Resolved' || t.status === 'Closed') return;
+      const clockTime = t.waiting_since || nowIso;
+      let changed = false;
+      let respBreached = t.response_breached;
+      let resBreached = t.resolution_breached;
 
-    // Check response SLA breach if no public reply yet
-    if (!t.first_public_reply_at && !respBreached && nowIso > t.response_deadline) {
-      respBreached = true;
-      changed = true;
-      logAuditEvent(db, {
-        ticketId: t.id,
-        action: 'breach',
-        details: { breached_clock: 'response', deadline: t.response_deadline, detected_at: nowIso }
-      });
-    }
+      // Check response SLA breach if no public reply yet
+      if (!t.first_public_reply_at && !respBreached && clockTime > t.response_deadline) {
+        respBreached = true;
+        changed = true;
+        await logAuditEvent(tx, {
+          ticketId: t.id,
+          action: 'breach',
+          details: { breached_clock: 'response', deadline: t.response_deadline, detected_at: nowIso }
+        });
+      }
 
-    // Check resolution SLA breach
-    if (!resBreached && nowIso > t.resolution_deadline) {
-      resBreached = true;
-      changed = true;
-      logAuditEvent(db, {
-        ticketId: t.id,
-        action: 'breach',
-        details: { breached_clock: 'resolution', deadline: t.resolution_deadline, detected_at: nowIso }
-      });
-    }
+      // Check resolution SLA breach
+      if (!resBreached && clockTime > t.resolution_deadline) {
+        resBreached = true;
+        changed = true;
+        await logAuditEvent(tx, {
+          ticketId: t.id,
+          action: 'breach',
+          details: { breached_clock: 'resolution', deadline: t.resolution_deadline, detected_at: nowIso }
+        });
+      }
 
-    if (changed) {
-      db.prepare(`
-        UPDATE tickets 
-        SET response_breached = ?, resolution_breached = ?, updated_at = ?
-        WHERE id = ?
-      `).run(respBreached ? 1 : 0, resBreached ? 1 : 0, nowIso, t.id);
-    }
+      if (changed) {
+        await tx.prepare(`
+          UPDATE tickets
+          SET response_breached = ?, resolution_breached = ?, updated_at = ?
+          WHERE id = ?
+        `).run(respBreached, resBreached, nowIso, t.id);
+      }
+    });
   }
 }
 
 /**
  * Applies auto-close to tickets waiting on customer for >= 5 working days.
  */
-export function applyAutoClose(db) {
-  const holidays = getHolidaysList(db);
+export async function applyAutoClose(db) {
+  const holidays = await getHolidaysList(db);
   const now = new Date();
   const nowIso = now.toISOString();
 
-  const waitingTickets = db.prepare(`
+  const waitingTickets = await db.prepare(`
     SELECT * FROM tickets WHERE status = 'Waiting on customer' AND waiting_since IS NOT NULL
   `).all();
 
   const closed = [];
   for (const t of waitingTickets) {
-    if (isAutoCloseDue(new Date(t.waiting_since), now, holidays)) {
-      // Transition to Closed
-      db.prepare(`
+    if (!isAutoCloseDue(new Date(t.waiting_since), now, holidays)) continue;
+    await inTransaction(db, async tx => {
+      const result = await tx.prepare(`
         UPDATE tickets
         SET status = 'Closed', closed_at = ?, updated_at = ?
-        WHERE id = ?
-      `).run(nowIso, nowIso, t.id);
+        WHERE id = ? AND status = 'Waiting on customer' AND waiting_since = ?
+      `).run(nowIso, nowIso, t.id, t.waiting_since);
+      if (!result.changes) return;
 
-      logAuditEvent(db, {
+      await logAuditEvent(tx, {
         ticketId: t.id,
         action: 'auto_close',
         details: {
@@ -102,7 +109,7 @@ export function applyAutoClose(db) {
         }
       });
       closed.push(t.id);
-    }
+    });
   }
   return closed;
 }
@@ -110,14 +117,18 @@ export function applyAutoClose(db) {
 /**
  * Creates a new ticket.
  */
-export function createTicket(db, {
+export function createTicket(db, input) {
+  return inTransaction(db, tx => insertTicket(tx, input));
+}
+
+async function insertTicket(db, {
   subject,
   description,
   customerId,
   priority = 'medium',
   parentTicketId = null
 }) {
-  const holidays = getHolidaysList(db);
+  const holidays = await getHolidaysList(db);
   const now = new Date();
   const nowIso = now.toISOString();
   const ticketId = `TCK-${randomUUID().slice(0, 8).toUpperCase()}`;
@@ -130,10 +141,10 @@ export function createTicket(db, {
       parent_ticket_id, created_at, updated_at,
       response_deadline, resolution_deadline,
       total_paused_minutes, response_breached, resolution_breached
-    ) VALUES (?, ?, ?, ?, ?, 'Open', ?, ?, ?, ?, ?, 0, 0, 0)
+    ) VALUES (?, ?, ?, ?, ?, 'Open', ?, ?, ?, ?, ?, 0, FALSE, FALSE)
   `);
 
-  stmt.run(
+  await stmt.run(
     ticketId,
     subject,
     description,
@@ -146,10 +157,10 @@ export function createTicket(db, {
     resolutionDeadline.toISOString()
   );
 
-  const customer = db.prepare('SELECT name FROM users WHERE id = ?').get(customerId);
+  const customer = await db.prepare('SELECT name FROM users WHERE id = ?').get(customerId);
   const customerName = customer ? customer.name : 'Customer';
 
-  logAuditEvent(db, {
+  await logAuditEvent(db, {
     ticketId,
     actorId: customerId,
     actorName: customerName,
@@ -163,12 +174,12 @@ export function createTicket(db, {
     }
   });
 
-  return getTicketById(db, ticketId);
+  return await getTicketById(db, ticketId);
 }
 
-export function getTicketById(db, ticketId) {
-  evaluateLiveBreaches(db);
-  return db.prepare(`
+export async function getTicketById(db, ticketId) {
+  await evaluateLiveBreaches(db, ticketId);
+  return await db.prepare(`
     SELECT t.*, 
            c.name as customer_name, c.email as customer_email,
            a.name as assigned_agent_name, a.email as assigned_agent_email
@@ -184,8 +195,12 @@ export function getTicketById(db, ticketId) {
  * Exactly one succeeds; conflicting agent gets { conflict: true }.
  */
 export function claimTicket(db, ticketId, agentId) {
+  return inTransaction(db, tx => claimTicketInTransaction(tx, ticketId, agentId));
+}
+
+async function claimTicketInTransaction(db, ticketId, agentId) {
   const nowIso = new Date().toISOString();
-  const agent = db.prepare('SELECT id, name FROM users WHERE id = ?').get(agentId);
+  const agent = await db.prepare('SELECT id, name FROM users WHERE id = ?').get(agentId);
   if (!agent) {
     throw new Error('Agent not found');
   }
@@ -197,11 +212,11 @@ export function claimTicket(db, ticketId, agentId) {
     WHERE id = ? AND assigned_agent_id IS NULL
   `);
 
-  const info = stmt.run(agentId, nowIso, ticketId);
+  const info = await stmt.run(agentId, nowIso, ticketId);
 
   if (info.changes === 0) {
     // Check if it was already assigned
-    const currentTicket = db.prepare('SELECT assigned_agent_id FROM tickets WHERE id = ?').get(ticketId);
+    const currentTicket = await db.prepare('SELECT assigned_agent_id FROM tickets WHERE id = ? FOR UPDATE').get(ticketId);
     if (!currentTicket) {
       return { notFound: true };
     }
@@ -211,7 +226,7 @@ export function claimTicket(db, ticketId, agentId) {
     };
   }
 
-  logAuditEvent(db, {
+  await logAuditEvent(db, {
     ticketId,
     actorId: agentId,
     actorName: agent.name,
@@ -219,29 +234,33 @@ export function claimTicket(db, ticketId, agentId) {
     details: { claimed_by: agent.name, agent_id: agentId }
   });
 
-  return { success: true, ticket: getTicketById(db, ticketId) };
+  return { success: true, ticket: await getTicketById(db, ticketId) };
 }
 
 /**
  * Reassigns ticket explicitly (FR-7).
  */
 export function reassignTicket(db, ticketId, newAgentId, actorId) {
+  return inTransaction(db, tx => reassignTicketInTransaction(tx, ticketId, newAgentId, actorId));
+}
+
+async function reassignTicketInTransaction(db, ticketId, newAgentId, actorId) {
   const nowIso = new Date().toISOString();
-  const newAgent = db.prepare('SELECT name FROM users WHERE id = ?').get(newAgentId);
-  const actor = db.prepare('SELECT name FROM users WHERE id = ?').get(actorId);
+  const newAgent = await db.prepare('SELECT name FROM users WHERE id = ?').get(newAgentId);
+  const actor = await db.prepare('SELECT name FROM users WHERE id = ?').get(actorId);
 
   if (!newAgent) throw new Error('Target agent not found');
 
-  const oldTicket = db.prepare('SELECT assigned_agent_id FROM tickets WHERE id = ?').get(ticketId);
+  const oldTicket = await db.prepare('SELECT assigned_agent_id FROM tickets WHERE id = ? FOR UPDATE').get(ticketId);
   if (!oldTicket) return { notFound: true };
 
-  db.prepare(`
+  await db.prepare(`
     UPDATE tickets 
     SET assigned_agent_id = ?, updated_at = ?
     WHERE id = ?
   `).run(newAgentId, nowIso, ticketId);
 
-  logAuditEvent(db, {
+  await logAuditEvent(db, {
     ticketId,
     actorId,
     actorName: actor ? actor.name : 'System',
@@ -253,17 +272,21 @@ export function reassignTicket(db, ticketId, newAgentId, actorId) {
     }
   });
 
-  return { success: true, ticket: getTicketById(db, ticketId) };
+  return { success: true, ticket: await getTicketById(db, ticketId) };
 }
 
 /**
  * Updates status and manages SLA pause/resume intervals (FR-2, 3.3).
  */
 export function updateTicketStatus(db, ticketId, newStatus, actorId, actorName = 'Agent') {
-  const ticket = db.prepare('SELECT * FROM tickets WHERE id = ?').get(ticketId);
+  return inTransaction(db, tx => updateTicketStatusInTransaction(tx, ticketId, newStatus, actorId, actorName));
+}
+
+async function updateTicketStatusInTransaction(db, ticketId, newStatus, actorId, actorName = 'Agent') {
+  const ticket = await db.prepare('SELECT * FROM tickets WHERE id = ? FOR UPDATE').get(ticketId);
   if (!ticket) return { notFound: true };
 
-  const holidays = getHolidaysList(db);
+  const holidays = await getHolidaysList(db);
   const now = new Date();
   const nowIso = now.toISOString();
 
@@ -296,12 +319,12 @@ export function updateTicketStatus(db, ticketId, newStatus, actorId, actorName =
   if (newStatus === 'Waiting on customer' && ticket.status !== 'Waiting on customer') {
     waitingSince = nowIso;
     const intervalId = `psi-${randomUUID()}`;
-    db.prepare(`
+    await db.prepare(`
       INSERT INTO sla_pause_intervals (id, ticket_id, paused_at)
       VALUES (?, ?, ?)
     `).run(intervalId, ticketId, nowIso);
 
-    logAuditEvent(db, {
+    await logAuditEvent(db, {
       ticketId,
       actorId,
       actorName,
@@ -312,7 +335,7 @@ export function updateTicketStatus(db, ticketId, newStatus, actorId, actorName =
 
   // Transitioning OUT of 'Waiting on customer' -> RESUME CLOCK
   if (ticket.status === 'Waiting on customer' && newStatus !== 'Waiting on customer') {
-    const activeInterval = db.prepare(`
+    const activeInterval = await db.prepare(`
       SELECT * FROM sla_pause_intervals 
       WHERE ticket_id = ? AND resumed_at IS NULL 
       ORDER BY paused_at DESC LIMIT 1
@@ -322,7 +345,7 @@ export function updateTicketStatus(db, ticketId, newStatus, actorId, actorName =
       const pausedStart = new Date(activeInterval.paused_at);
       const pausedWorkingMinutes = calculateElapsedWorkingMinutes(pausedStart, now, holidays);
 
-      db.prepare(`
+      await db.prepare(`
         UPDATE sla_pause_intervals 
         SET resumed_at = ?, working_minutes_paused = ?
         WHERE id = ?
@@ -334,7 +357,7 @@ export function updateTicketStatus(db, ticketId, newStatus, actorId, actorName =
         resolutionDeadline = addWorkingMinutes(resolutionDeadline, pausedWorkingMinutes, holidays);
       }
 
-      logAuditEvent(db, {
+      await logAuditEvent(db, {
         ticketId,
         actorId,
         actorName,
@@ -350,25 +373,20 @@ export function updateTicketStatus(db, ticketId, newStatus, actorId, actorName =
     waitingSince = null;
   }
 
-  // Handling Resolved status
+  let resolutionBreached = ticket.resolution_breached;
   if (newStatus === 'Resolved') {
     resolvedAt = nowIso;
-    if (nowIso > ticket.resolution_deadline) {
-      db.prepare('UPDATE tickets SET resolution_breached = 1 WHERE id = ?').run(ticketId);
-    }
+    resolutionBreached ||= now > resolutionDeadline;
   }
 
-  // Handling Reopened status from Resolved:
-  // Exclude time spent in Resolved state (treat as paused working time) so that a ticket
-  // sitting Resolved for several days before reopening is not immediately marked late.
-  let resolutionBreached = ticket.resolution_breached;
+  // Exclude working time spent in Resolved when a customer reopens the ticket.
   if (ticket.status === 'Resolved' && newStatus === 'Reopened') {
     if (ticket.resolved_at) {
       const resolvedStart = new Date(ticket.resolved_at);
       const resolvedWorkingMinutes = calculateElapsedWorkingMinutes(resolvedStart, now, holidays);
 
       const intervalId = `psi-${randomUUID()}`;
-      db.prepare(`
+      await db.prepare(`
         INSERT INTO sla_pause_intervals (id, ticket_id, paused_at, resumed_at, working_minutes_paused)
         VALUES (?, ?, ?, ?, ?)
       `).run(intervalId, ticketId, ticket.resolved_at, nowIso, resolvedWorkingMinutes);
@@ -384,7 +402,7 @@ export function updateTicketStatus(db, ticketId, newStatus, actorId, actorName =
       // If the ticket was resolved within deadline initially, reopening with paused time excluded
       // preserves the on-time status if current time is within the new extended resolution deadline.
       if (nowIso <= resolutionDeadline.toISOString() && new Date(ticket.resolved_at) <= new Date(ticket.resolution_deadline)) {
-        resolutionBreached = 0;
+        resolutionBreached = false;
       }
     }
     resolvedAt = null;
@@ -395,7 +413,7 @@ export function updateTicketStatus(db, ticketId, newStatus, actorId, actorName =
     closedAt = nowIso;
   }
 
-  db.prepare(`
+  await db.prepare(`
     UPDATE tickets 
     SET status = ?, 
         waiting_since = ?, 
@@ -420,7 +438,7 @@ export function updateTicketStatus(db, ticketId, newStatus, actorId, actorName =
     ticketId
   );
 
-  logAuditEvent(db, {
+  await logAuditEvent(db, {
     ticketId,
     actorId,
     actorName,
@@ -428,7 +446,7 @@ export function updateTicketStatus(db, ticketId, newStatus, actorId, actorName =
     details: { old_status: ticket.status, new_status: newStatus }
   });
 
-  return { success: true, ticket: getTicketById(db, ticketId) };
+  return { success: true, ticket: await getTicketById(db, ticketId) };
 }
 
 /**
@@ -436,10 +454,14 @@ export function updateTicketStatus(db, ticketId, newStatus, actorId, actorName =
  * Recomputes deadlines from original start. A downgrade never removes an existing breach.
  */
 export function updateTicketPriority(db, ticketId, newPriority, actorId, actorName = 'Agent') {
-  const ticket = db.prepare('SELECT * FROM tickets WHERE id = ?').get(ticketId);
+  return inTransaction(db, tx => updateTicketPriorityInTransaction(tx, ticketId, newPriority, actorId, actorName));
+}
+
+async function updateTicketPriorityInTransaction(db, ticketId, newPriority, actorId, actorName = 'Agent') {
+  const ticket = await db.prepare('SELECT * FROM tickets WHERE id = ? FOR UPDATE').get(ticketId);
   if (!ticket) return { notFound: true };
 
-  const holidays = getHolidaysList(db);
+  const holidays = await getHolidaysList(db);
   const now = new Date();
   const nowIso = now.toISOString();
 
@@ -449,13 +471,13 @@ export function updateTicketPriority(db, ticketId, newPriority, actorId, actorNa
     totalPausedMinutes: ticket.total_paused_minutes || 0,
     holidays,
     currentTime: now,
-    currentResponseBreached: ticket.response_breached === 1,
-    currentResolutionBreached: ticket.resolution_breached === 1,
+    currentResponseBreached: ticket.response_breached,
+    currentResolutionBreached: ticket.resolution_breached,
     firstPublicReplyAt: ticket.first_public_reply_at ? new Date(ticket.first_public_reply_at) : null,
     resolvedAt: ticket.resolved_at ? new Date(ticket.resolved_at) : null
   });
 
-  db.prepare(`
+  await db.prepare(`
     UPDATE tickets 
     SET priority = ?,
         response_deadline = ?,
@@ -468,13 +490,13 @@ export function updateTicketPriority(db, ticketId, newPriority, actorId, actorNa
     newPriority,
     recomputed.responseDeadline.toISOString(),
     recomputed.resolutionDeadline.toISOString(),
-    recomputed.responseBreached ? 1 : 0,
-    recomputed.resolutionBreached ? 1 : 0,
+    recomputed.responseBreached,
+    recomputed.resolutionBreached,
     nowIso,
     ticketId
   );
 
-  logAuditEvent(db, {
+  await logAuditEvent(db, {
     ticketId,
     actorId,
     actorName,
@@ -489,5 +511,5 @@ export function updateTicketPriority(db, ticketId, newPriority, actorId, actorNa
     }
   });
 
-  return { success: true, ticket: getTicketById(db, ticketId) };
+  return { success: true, ticket: await getTicketById(db, ticketId) };
 }

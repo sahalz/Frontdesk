@@ -7,7 +7,7 @@ import express from 'express';
 import cors from 'cors';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { getDatabase } from './db.js';
+import { createDatabase } from './db.js';
 import { createCustomerRouter } from './routes/customerRoutes.js';
 import { createAgentRouter } from './routes/agentRoutes.js';
 import { createManagerRouter } from './routes/managerRoutes.js';
@@ -18,35 +18,32 @@ import { evaluateLiveBreaches, applyAutoClose } from './services/ticketService.j
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-export function createApp(db = getDatabase()) {
+export function createApp(db) {
   const app = express();
-
   app.use(cors());
-  app.use(express.json());
 
-  // Mount API routers
+  app.get('/api/health', async (req, res) => {
+    try {
+      await db.prepare('SELECT 1 FROM config_sla LIMIT 1').get();
+      res.json({ status: 'ok', service: 'Frontdesk API', version: '1.0.0', time_utc: new Date().toISOString() });
+    } catch {
+      res.status(503).json({ status: 'unavailable' });
+    }
+  });
+
+  app.use(express.json());
   app.use('/api/customer', createCustomerRouter(db));
   app.use('/api/agent', createAgentRouter(db));
   app.use('/api/manager', createManagerRouter(db));
   app.use('/api/holidays', createHolidayRouter(db));
   app.use('/api/users', createUserRouter(db));
 
-  // Health check endpoint
-  app.get('/api/health', (req, res) => {
-    res.json({
-      status: 'ok',
-      service: 'Frontdesk API',
-      version: '1.0.0',
-      time_utc: new Date().toISOString()
-    });
-  });
-
   // Serve static frontend assets
   const frontendPath = path.resolve(__dirname, '../../frontend');
   app.use(express.static(frontendPath));
 
   // Fallback to index.html for SPA
-  app.get('*', (req, res, next) => {
+  app.get(/.*/, (req, res, next) => {
     if (req.path.startsWith('/api')) {
       return next();
     }
@@ -58,34 +55,45 @@ export function createApp(db = getDatabase()) {
 
 // Background scheduler for auto-close and breach monitoring
 export function startBackgroundTasks(db) {
-  const interval = setInterval(() => {
+  let running = false;
+  const interval = setInterval(async () => {
+    if (running) return;
+    running = true;
     try {
-      evaluateLiveBreaches(db);
-      applyAutoClose(db);
+      await evaluateLiveBreaches(db);
+      await applyAutoClose(db);
     } catch (err) {
       console.error('[Background Task Error]', err);
+    } finally {
+      running = false;
     }
   }, 60 * 1000);
 
   return interval;
 }
 
-// If run directly, start server
+// If run directly, initialize PostgreSQL before accepting requests.
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  const PORT = process.env.PORT || 3000;
-  const db = getDatabase();
+  const db = createDatabase();
+  try {
+    await db.initialize();
+  } catch (err) {
+    await db.close();
+    throw err;
+  }
+
+  const port = process.env.PORT || 3000;
   const app = createApp(db);
   const timer = startBackgroundTasks(db);
-
-  const server = app.listen(PORT, () => {
-    console.log(`=========================================`);
-    console.log(`Frontdesk Server running on port ${PORT}`);
-    console.log(`URL: http://localhost:${PORT}`);
-    console.log(`=========================================`);
+  const server = app.listen(port, '0.0.0.0', () => {
+    console.log(`Frontdesk is listening on port ${port}`);
   });
 
-  process.on('SIGINT', () => {
+  function shutdown() {
     clearInterval(timer);
-    server.close(() => process.exit(0));
-  });
+    server.close(() => void db.close());
+  }
+
+  process.once('SIGINT', shutdown);
+  process.once('SIGTERM', shutdown);
 }

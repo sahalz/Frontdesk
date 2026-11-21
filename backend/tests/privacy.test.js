@@ -1,12 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createDatabase } from '../src/db.js';
+import { createTestDatabase } from './testDatabase.js';
 import { createApp } from '../src/server.js';
 import { createTicket } from '../src/services/ticketService.js';
 import { addAgentMessage } from '../src/services/messageService.js';
 
-test('Security & Privacy (NFR-2, FR-10, NFR-5) - Zero Internal Note Leakage to Customer', async () => {
-  const db = createDatabase(':memory:');
+test('Security & Privacy (NFR-2, FR-10, NFR-5) - Zero Internal Note Leakage to Customer', async t => {
+  const db = await createTestDatabase();
+  t.after(() => db.close());
   const app = createApp(db);
 
   // Start temporary server for HTTP calls
@@ -16,7 +17,7 @@ test('Security & Privacy (NFR-2, FR-10, NFR-5) - Zero Internal Note Leakage to C
 
   try {
     // 1. Create a ticket
-    const ticket = createTicket(db, {
+    const ticket = await createTicket(db, {
       subject: 'Urgent system outage',
       description: 'Cannot access my account',
       customerId: 'cust-1',
@@ -27,14 +28,14 @@ test('Security & Privacy (NFR-2, FR-10, NFR-5) - Zero Internal Note Leakage to C
     const PUBLIC_REPLY = 'Hello, we are investigating your issue right away.';
 
     // 2. Add an internal note and a public reply as an agent
-    addAgentMessage(db, {
+    await addAgentMessage(db, {
       ticketId: ticket.id,
       agentId: 'agent-1',
       type: 'internal_note',
       content: TOP_SECRET_NOTE
     });
 
-    addAgentMessage(db, {
+    await addAgentMessage(db, {
       ticketId: ticket.id,
       agentId: 'agent-1',
       type: 'public_reply',
@@ -105,43 +106,44 @@ test('Security & Privacy (NFR-2, FR-10, NFR-5) - Zero Internal Note Leakage to C
   }
 });
 
-test('Data Integrity (NFR-3, FR-15) - Database Triggers Enforce Append-Only Tables', () => {
-  const db = createDatabase(':memory:');
+test('Data Integrity (NFR-3, FR-15) - Database Triggers Enforce Append-Only Tables', async t => {
+  const db = await createTestDatabase();
+  t.after(() => db.close());
 
-  const ticket = createTicket(db, {
+  const ticket = await createTicket(db, {
     subject: 'Audit test ticket',
     description: 'Testing immutability',
     customerId: 'cust-1'
   });
 
-  addAgentMessage(db, {
+  await addAgentMessage(db, {
     ticketId: ticket.id,
     agentId: 'agent-1',
     type: 'public_reply',
     content: 'Initial message'
   });
 
-  const msg = db.prepare('SELECT id FROM messages WHERE ticket_id = ?').get(ticket.id);
+  const msg = await db.prepare('SELECT id FROM messages WHERE ticket_id = ?').get(ticket.id);
 
   // Attempt to UPDATE message - MUST FAIL
-  assert.throws(() => {
-    db.prepare("UPDATE messages SET content = 'Tampered content' WHERE id = ?").run(msg.id);
-  }, /Messages are append-only/);
+  await assert.rejects(() => {
+    return db.prepare("UPDATE messages SET content = 'Tampered content' WHERE id = ?").run(msg.id);
+  }, /messages is strictly append-only/);
 
   // Attempt to DELETE message - MUST FAIL
-  assert.throws(() => {
-    db.prepare('DELETE FROM messages WHERE id = ?').run(msg.id);
-  }, /Messages are append-only/);
+  await assert.rejects(() => {
+    return db.prepare('DELETE FROM messages WHERE id = ?').run(msg.id);
+  }, /messages is strictly append-only/);
 
-  const auditEntry = db.prepare('SELECT id FROM audit_logs WHERE ticket_id = ?').get(ticket.id);
+  const auditEntry = await db.prepare('SELECT id FROM audit_logs WHERE ticket_id = ?').get(ticket.id);
 
   // Attempt to UPDATE audit_logs - MUST FAIL
-  assert.throws(() => {
-    db.prepare("UPDATE audit_logs SET action = 'tampered' WHERE id = ?").run(auditEntry.id);
-  }, /Audit logs are append-only/);
+  await assert.rejects(() => {
+    return db.prepare("UPDATE audit_logs SET action = 'tampered' WHERE id = ?").run(auditEntry.id);
+  }, /audit_logs is strictly append-only/);
 
   // Attempt to DELETE audit_logs - MUST FAIL
-  assert.throws(() => {
-    db.prepare('DELETE FROM audit_logs WHERE id = ?').run(auditEntry.id);
-  }, /Audit logs are append-only/);
+  await assert.rejects(() => {
+    return db.prepare('DELETE FROM audit_logs WHERE id = ?').run(auditEntry.id);
+  }, /audit_logs is strictly append-only/);
 });

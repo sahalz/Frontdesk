@@ -21,12 +21,12 @@ export function createAgentRouter(db) {
   const router = express.Router();
 
   // Agent auth middleware
-  router.use((req, res, next) => {
+  router.use(async (req, res, next) => {
     const agentId = req.headers['x-user-id'] || req.query.agent_id;
     if (!agentId) {
       return res.status(401).json({ error: 'Agent identification required (x-user-id header)' });
     }
-    const user = db.prepare('SELECT * FROM users WHERE id = ?').get(agentId);
+    const user = await db.prepare('SELECT * FROM users WHERE id = ?').get(agentId);
     if (!user || !['agent', 'manager'].includes(user.role)) {
       return res.status(403).json({ error: 'Unauthorized: valid agent or manager role required' });
     }
@@ -35,12 +35,11 @@ export function createAgentRouter(db) {
   });
 
   // List all tickets with SLA breach indicators
-  router.get('/tickets', (req, res) => {
+  router.get('/tickets', async (req, res) => {
     // Run live breach evaluation and auto-close check
-    evaluateLiveBreaches(db);
-    applyAutoClose(db);
+    await evaluateLiveBreaches(db);
+    await applyAutoClose(db);
 
-    const nowIso = new Date().toISOString();
     const filter = req.query.filter; // 'all', 'mine', 'unassigned', 'late', 'waiting'
 
     let sql = `
@@ -60,17 +59,17 @@ export function createAgentRouter(db) {
     } else if (filter === 'unassigned') {
       sql += ' AND t.assigned_agent_id IS NULL';
     } else if (filter === 'late') {
-      sql += ' AND (t.response_breached = 1 OR t.resolution_breached = 1)';
+      sql += ' AND (t.response_breached = TRUE OR t.resolution_breached = TRUE)';
     } else if (filter === 'waiting') {
       sql += " AND t.status = 'Waiting on customer'";
     }
 
-    sql += ' ORDER BY (t.response_breached = 1 OR t.resolution_breached = 1) DESC, t.created_at DESC';
+    sql += ' ORDER BY (t.response_breached = TRUE OR t.resolution_breached = TRUE) DESC, t.created_at DESC';
 
-    const tickets = db.prepare(sql).all(...params);
+    const tickets = await db.prepare(sql).all(...params);
 
     const enhanced = tickets.map(t => {
-      const isLate = t.response_breached === 1 || t.resolution_breached === 1;
+      const isLate = t.response_breached || t.resolution_breached;
       const isWaiting = t.status === 'Waiting on customer';
       return {
         ...serializeAgentTicket(t),
@@ -84,21 +83,22 @@ export function createAgentRouter(db) {
   });
 
   // Ticket Detail View (Conversation, audit history, pause intervals)
-  router.get('/tickets/:id', (req, res) => {
-    const ticket = getTicketById(db, req.params.id);
+  router.get('/tickets/:id', async (req, res) => {
+    const ticket = await getTicketById(db, req.params.id);
     if (!ticket) {
       return res.status(404).json({ error: 'Ticket not found' });
     }
 
-    const messages = getAgentMessages(db, ticket.id);
-    const auditLogs = db.prepare(`
+    const messages = await getAgentMessages(db, ticket.id);
+    const auditRows = await db.prepare(`
       SELECT * FROM audit_logs WHERE ticket_id = ? ORDER BY created_at ASC
-    `).all(ticket.id).map(log => ({
+    `).all(ticket.id);
+    const auditLogs = auditRows.map(log => ({
       ...log,
-      details: log.details ? JSON.parse(log.details) : null
+      details: typeof log.details === 'string' ? JSON.parse(log.details) : log.details
     }));
 
-    const pauseIntervals = db.prepare(`
+    const pauseIntervals = await db.prepare(`
       SELECT * FROM sla_pause_intervals WHERE ticket_id = ? ORDER BY paused_at ASC
     `).all(ticket.id);
 
@@ -111,8 +111,8 @@ export function createAgentRouter(db) {
   });
 
   // Atomic Claim Ticket (FR-5, FR-6)
-  router.post('/tickets/:id/claim', (req, res) => {
-    const result = claimTicket(db, req.params.id, req.agent.id);
+  router.post('/tickets/:id/claim', async (req, res) => {
+    const result = await claimTicket(db, req.params.id, req.agent.id);
 
     if (result.notFound) {
       return res.status(404).json({ error: 'Ticket not found' });
@@ -135,13 +135,13 @@ export function createAgentRouter(db) {
   });
 
   // Reassign Ticket (FR-7)
-  router.post('/tickets/:id/reassign', (req, res) => {
+  router.post('/tickets/:id/reassign', async (req, res) => {
     const { newAgentId } = req.body;
     if (!newAgentId) {
       return res.status(400).json({ error: 'newAgentId is required' });
     }
 
-    const result = reassignTicket(db, req.params.id, newAgentId, req.agent.id);
+    const result = await reassignTicket(db, req.params.id, newAgentId, req.agent.id);
     if (result.notFound) {
       return res.status(404).json({ error: 'Ticket not found' });
     }
@@ -154,14 +154,14 @@ export function createAgentRouter(db) {
   });
 
   // Change Status (FR-18)
-  router.post('/tickets/:id/status', (req, res) => {
+  router.post('/tickets/:id/status', async (req, res) => {
     const { status } = req.body;
     const allowed = ['Open', 'In progress', 'Waiting on customer', 'Resolved', 'Closed', 'Reopened'];
     if (!allowed.includes(status)) {
       return res.status(400).json({ error: `Invalid status. Allowed: ${allowed.join(', ')}` });
     }
 
-    const result = updateTicketStatus(db, req.params.id, status, req.agent.id, req.agent.name);
+    const result = await updateTicketStatus(db, req.params.id, status, req.agent.id, req.agent.name);
     if (result.notFound) {
       return res.status(404).json({ error: 'Ticket not found' });
     }
@@ -176,14 +176,14 @@ export function createAgentRouter(db) {
   });
 
   // Change Priority (FR-18, Section 3.6)
-  router.post('/tickets/:id/priority', (req, res) => {
+  router.post('/tickets/:id/priority', async (req, res) => {
     const { priority } = req.body;
     const allowed = ['urgent', 'medium', 'low'];
     if (!allowed.includes(priority)) {
       return res.status(400).json({ error: `Invalid priority. Allowed: ${allowed.join(', ')}` });
     }
 
-    const result = updateTicketPriority(db, req.params.id, priority, req.agent.id, req.agent.name);
+    const result = await updateTicketPriority(db, req.params.id, priority, req.agent.id, req.agent.name);
     if (result.notFound) {
       return res.status(404).json({ error: 'Ticket not found' });
     }
@@ -195,7 +195,7 @@ export function createAgentRouter(db) {
   });
 
   // Add Public Reply or Internal Note (FR-8, FR-9, FR-12)
-  router.post('/tickets/:id/message', (req, res) => {
+  router.post('/tickets/:id/message', async (req, res) => {
     const { type, content } = req.body;
     if (!type || !['public_reply', 'internal_note'].includes(type)) {
       return res.status(400).json({ error: "type must be 'public_reply' or 'internal_note'" });
@@ -204,7 +204,7 @@ export function createAgentRouter(db) {
       return res.status(400).json({ error: 'content is required' });
     }
 
-    const result = addAgentMessage(db, {
+    const result = await addAgentMessage(db, {
       ticketId: req.params.id,
       agentId: req.agent.id,
       type,

@@ -9,13 +9,13 @@ export function createHolidayRouter(db) {
   const router = express.Router();
 
   // List holidays
-  router.get('/', (req, res) => {
-    const holidays = db.prepare('SELECT * FROM holidays ORDER BY date ASC').all();
+  router.get('/', async (req, res) => {
+    const holidays = await db.prepare('SELECT * FROM holidays ORDER BY date ASC').all();
     res.json({ holidays });
   });
 
   // Add holiday
-  router.post('/', (req, res) => {
+  router.post('/', async (req, res) => {
     const { date, name } = req.body;
     if (!date || !name) {
       return res.status(400).json({ error: 'date (YYYY-MM-DD) and name are required' });
@@ -29,10 +29,10 @@ export function createHolidayRouter(db) {
     try {
       const now = new Date().toISOString();
       const stmt = db.prepare('INSERT INTO holidays (date, name, created_at) VALUES (?, ?, ?)');
-      stmt.run(date, name, now);
+      await stmt.run(date, name, now);
       res.status(201).json({ success: true, message: 'Holiday added' });
     } catch (err) {
-      if (err.message.includes('UNIQUE constraint failed')) {
+      if (err.code === '23505') {
         return res.status(409).json({ error: 'Holiday for this date already exists' });
       }
       res.status(500).json({ error: err.message });
@@ -40,9 +40,9 @@ export function createHolidayRouter(db) {
   });
 
   // Delete holiday
-  router.delete('/:id', (req, res) => {
+  router.delete('/:id', async (req, res) => {
     const stmt = db.prepare('DELETE FROM holidays WHERE id = ?');
-    const info = stmt.run(req.params.id);
+    const info = await stmt.run(req.params.id);
     if (info.changes === 0) {
       return res.status(404).json({ error: 'Holiday not found' });
     }

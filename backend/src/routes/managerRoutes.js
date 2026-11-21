@@ -12,12 +12,12 @@ export function createManagerRouter(db) {
   const router = express.Router();
 
   // Manager auth check
-  router.use((req, res, next) => {
+  router.use(async (req, res, next) => {
     const userId = req.headers['x-user-id'] || req.query.manager_id;
     if (!userId) {
       return res.status(401).json({ error: 'Manager identification required' });
     }
-    const user = db.prepare('SELECT * FROM users WHERE id = ?').get(userId);
+    const user = await db.prepare('SELECT * FROM users WHERE id = ?').get(userId);
     if (!user || user.role !== 'manager') {
       return res.status(403).json({ error: 'Unauthorized: manager role required' });
     }
@@ -26,21 +26,21 @@ export function createManagerRouter(db) {
   });
 
   // Late tickets report (FR-19)
-  router.get('/reports/late-tickets', (req, res) => {
-    evaluateLiveBreaches(db);
+  router.get('/reports/late-tickets', async (req, res) => {
+    await evaluateLiveBreaches(db);
 
-    const lateTickets = db.prepare(`
+    const lateTickets = await db.prepare(`
       SELECT t.*, 
              c.name as customer_name, c.email as customer_email,
              a.name as assigned_agent_name
       FROM tickets t
       LEFT JOIN users c ON t.customer_id = c.id
       LEFT JOIN users a ON t.assigned_agent_id = a.id
-      WHERE t.response_breached = 1 OR t.resolution_breached = 1
+      WHERE t.response_breached = TRUE OR t.resolution_breached = TRUE
       ORDER BY t.created_at DESC
     `).all();
 
-    const report = lateTickets.map(t => {
+    const report = await Promise.all(lateTickets.map(async t => {
       // Determine which clock breached
       let breachedClock = 'none';
       if (t.response_breached && t.resolution_breached) breachedClock = 'both';
@@ -48,18 +48,19 @@ export function createManagerRouter(db) {
       else if (t.resolution_breached) breachedClock = 'resolution';
 
       // Fetch audit history
-      const history = db.prepare(`
+      const historyRows = await db.prepare(`
         SELECT id, actor_name, action, details, created_at 
         FROM audit_logs 
         WHERE ticket_id = ? 
         ORDER BY created_at ASC
-      `).all(t.id).map(h => ({
+      `).all(t.id);
+      const history = historyRows.map(h => ({
         ...h,
-        details: h.details ? JSON.parse(h.details) : null
+        details: typeof h.details === 'string' ? JSON.parse(h.details) : h.details
       }));
 
       // Fetch pause intervals
-      const pauses = db.prepare(`
+      const pauses = await db.prepare(`
         SELECT * FROM sla_pause_intervals 
         WHERE ticket_id = ? 
         ORDER BY paused_at ASC
@@ -72,7 +73,7 @@ export function createManagerRouter(db) {
         pause_intervals: pauses,
         history
       };
-    });
+    }));
 
     res.json({
       generated_at: new Date().toISOString(),
@@ -82,15 +83,15 @@ export function createManagerRouter(db) {
   });
 
   // Overall system summary
-  router.get('/reports/summary', (req, res) => {
-    evaluateLiveBreaches(db);
+  router.get('/reports/summary', async (req, res) => {
+    await evaluateLiveBreaches(db);
 
-    const total = db.prepare('SELECT COUNT(*) as count FROM tickets').get().count;
-    const open = db.prepare("SELECT COUNT(*) as count FROM tickets WHERE status IN ('Open', 'In progress', 'Reopened')").get().count;
-    const waiting = db.prepare("SELECT COUNT(*) as count FROM tickets WHERE status = 'Waiting on customer'").get().count;
-    const resolved = db.prepare("SELECT COUNT(*) as count FROM tickets WHERE status = 'Resolved'").get().count;
-    const closed = db.prepare("SELECT COUNT(*) as count FROM tickets WHERE status = 'Closed'").get().count;
-    const late = db.prepare('SELECT COUNT(*) as count FROM tickets WHERE response_breached = 1 OR resolution_breached = 1').get().count;
+    const total = (await db.prepare('SELECT CAST(COUNT(*) AS INTEGER) AS count FROM tickets').get()).count;
+    const open = (await db.prepare("SELECT CAST(COUNT(*) AS INTEGER) AS count FROM tickets WHERE status IN ('Open', 'In progress', 'Reopened')").get()).count;
+    const waiting = (await db.prepare("SELECT CAST(COUNT(*) AS INTEGER) AS count FROM tickets WHERE status = 'Waiting on customer'").get()).count;
+    const resolved = (await db.prepare("SELECT CAST(COUNT(*) AS INTEGER) AS count FROM tickets WHERE status = 'Resolved'").get()).count;
+    const closed = (await db.prepare("SELECT CAST(COUNT(*) AS INTEGER) AS count FROM tickets WHERE status = 'Closed'").get()).count;
+    const late = (await db.prepare('SELECT CAST(COUNT(*) AS INTEGER) AS count FROM tickets WHERE response_breached = TRUE OR resolution_breached = TRUE').get()).count;
 
     res.json({
       total_tickets: total,

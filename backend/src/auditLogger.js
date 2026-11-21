@@ -5,7 +5,7 @@
 
 import { randomUUID } from 'node:crypto';
 
-export function logAuditEvent(db, {
+export async function logAuditEvent(db, {
   ticketId,
   actorId = null,
   actorName = 'System',
@@ -22,6 +22,6 @@ export function logAuditEvent(db, {
     VALUES (?, ?, ?, ?, ?, ?, ?)
   `);
 
-  stmt.run(id, ticketId, actorId, actorName, action, detailsJson, createdAt);
+  await stmt.run(id, ticketId, actorId, actorName, action, detailsJson, createdAt);
   return { id, ticketId, actorId, actorName, action, details, createdAt };
 }

@@ -1,9 +1,6 @@
 -- Frontdesk PostgreSQL Production Schema
 -- Designed for Arvo Systems Support Ticketing System (SRS v1.0)
 
--- Extensions
-CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
-
 -- SLA Targets Configuration Table
 CREATE TABLE IF NOT EXISTS config_sla (
     priority VARCHAR(20) PRIMARY KEY,
@@ -16,17 +13,14 @@ INSERT INTO config_sla (priority, first_reply_minutes, resolve_type, resolve_day
     ('urgent', 120, 'same_working_day', 0),
     ('medium', 270, 'working_days', 3),
     ('low', 540, 'working_days', 5)
-ON CONFLICT (priority) DO UPDATE SET
-    first_reply_minutes = EXCLUDED.first_reply_minutes,
-    resolve_type = EXCLUDED.resolve_type,
-    resolve_days = EXCLUDED.resolve_days;
+ON CONFLICT (priority) DO NOTHING;
 
 -- Editable Holidays Table
 CREATE TABLE IF NOT EXISTS holidays (
     id SERIAL PRIMARY KEY,
     date DATE UNIQUE NOT NULL,
     name VARCHAR(255) NOT NULL,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT (NOW() AT TIME ZONE 'utc')
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
 -- Users Table (Agents, Managers, Customers)
@@ -35,8 +29,18 @@ CREATE TABLE IF NOT EXISTS users (
     name VARCHAR(255) NOT NULL,
     email VARCHAR(255) UNIQUE NOT NULL,
     role VARCHAR(32) NOT NULL CHECK (role IN ('agent', 'manager', 'customer')),
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT (NOW() AT TIME ZONE 'utc')
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
+
+-- Demo personas used by the existing UI.
+INSERT INTO users (id, name, email, role) VALUES
+    ('agent-1', 'Meera (Lead Agent)', 'meera@arvo.internal', 'agent'),
+    ('agent-2', 'Rahul (Support Agent)', 'rahul@arvo.internal', 'agent'),
+    ('agent-3', 'Priya (Support Agent)', 'priya@arvo.internal', 'agent'),
+    ('mgr-1', 'Vikram (Support Manager)', 'vikram@arvo.internal', 'manager'),
+    ('cust-1', 'Acme Corp (Customer)', 'contact@acmecorp.com', 'customer'),
+    ('cust-2', 'Beta Logistics (Customer)', 'support@betalogistics.com', 'customer')
+ON CONFLICT (id) DO NOTHING;
 
 -- Tickets Table
 CREATE TABLE IF NOT EXISTS tickets (

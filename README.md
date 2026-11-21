@@ -52,24 +52,22 @@ Frontdesk is a web-based support ticketing platform built for Arvo Systems to re
 ## 3. Technology Stack
 
 * **Backend**: Node.js (ES Modules, Express).
-* **Database**:
-  * **Development / Testing**: Node native `node:sqlite` (`DatabaseSync`) with SQLite triggers for zero external setup.
-  * **Production**: PostgreSQL schema with PL/pgSQL triggers and privilege hardening (`src/schema.sql`).
+* **Database**: PostgreSQL via the `pg` connection pool. Startup applies `backend/src/schema.sql` and seeds the demo personas and SLA defaults.
 * **Frontend**: Vanilla HTML5, CSS3, JavaScript SPA with instant persona switching (Agent, Customer, Manager, Calendar).
-* **Testing**: Node.js test runner (`node --test`).
+* **Testing**: Node.js test runner (`node --test`) with embedded PostgreSQL (PGlite) for database and HTTP tests.
 
 ---
 
 ## 4. Local Setup & Execution
 
 ### Prerequisites
-* Node.js v20+ (Node v22+ or v24 recommended)
-* npm v10+
+* Node.js 24 and npm
+* A PostgreSQL database for running the app. The test suite uses an embedded database.
 
 ### Step 1: Install Dependencies
 ```powershell
 cd backend
-npm install
+npm ci
 ```
 
 ### Step 2: Run Automated Test Suites
@@ -78,10 +76,15 @@ npm test
 ```
 
 ### Step 3: Start the Application
+
+Create an empty PostgreSQL database (for example, `frontdesk`) and use a database account that can create tables and triggers. Set `DATABASE_URL` in the shell where you run the server.
+
 ```powershell
+$env:DATABASE_URL = 'postgresql://frontdesk_user:your-password@localhost:5432/frontdesk'
 npm start
 ```
-The application will be live at: **http://localhost:3000**
+
+Open **http://localhost:3000**. The startup script creates the schema and seeds the demo users. Any existing `frontdesk.sqlite` file is left on disk. Its records are not automatically imported into PostgreSQL.
 
 ---
 
