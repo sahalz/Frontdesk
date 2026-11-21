@@ -4,9 +4,11 @@
  */
 
 import express from 'express';
+import { requireRole } from '../auth.js';
 
 export function createHolidayRouter(db) {
   const router = express.Router();
+  router.use(requireRole('manager'));
 
   // List holidays
   router.get('/', async (req, res) => {

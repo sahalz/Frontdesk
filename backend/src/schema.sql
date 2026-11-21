@@ -32,15 +32,27 @@ CREATE TABLE IF NOT EXISTS users (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
--- Demo personas used by the existing UI.
-INSERT INTO users (id, name, email, role) VALUES
-    ('agent-1', 'Meera (Lead Agent)', 'meera@arvo.internal', 'agent'),
-    ('agent-2', 'Rahul (Support Agent)', 'rahul@arvo.internal', 'agent'),
-    ('agent-3', 'Priya (Support Agent)', 'priya@arvo.internal', 'agent'),
-    ('mgr-1', 'Vikram (Support Manager)', 'vikram@arvo.internal', 'manager'),
-    ('cust-1', 'Acme Corp (Customer)', 'contact@acmecorp.com', 'customer'),
-    ('cust-2', 'Beta Logistics (Customer)', 'support@betalogistics.com', 'customer')
-ON CONFLICT (id) DO NOTHING;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS auth_user_id UUID;
+CREATE UNIQUE INDEX IF NOT EXISTS users_auth_user_id_unique ON users (auth_user_id);
+
+-- Self-registered customers use a user ID without an email address.
+ALTER TABLE users ALTER COLUMN email DROP NOT NULL;
+
+CREATE TABLE IF NOT EXISTS customer_credentials (
+    user_id VARCHAR(64) PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    password_salt TEXT NOT NULL,
+    password_hash TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS customer_sessions (
+    token_hash TEXT PRIMARY KEY,
+    user_id VARCHAR(64) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    expires_at TIMESTAMPTZ NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS customer_sessions_expiry ON customer_sessions (expires_at);
+ALTER TABLE customer_credentials ENABLE ROW LEVEL SECURITY;
+ALTER TABLE customer_sessions ENABLE ROW LEVEL SECURITY;
 
 -- Tickets Table
 CREATE TABLE IF NOT EXISTS tickets (

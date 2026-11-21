@@ -1,13 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createTestDatabase } from './testDatabase.js';
+import { createTestDatabase, testAuth } from './testDatabase.js';
 import { createApp } from '../src/server.js';
 import { createTicket } from '../src/services/ticketService.js';
 
 test('Concurrency & Claiming (FR-5, FR-6, NFR-5) - Exactly One Winner and HTTP 409 Conflict', async t => {
   const db = await createTestDatabase();
   t.after(() => db.close());
-  const app = createApp(db);
+  const app = createApp(db, { auth: testAuth });
 
   const server = app.listen(0);
   const port = server.address().port;
@@ -26,11 +26,11 @@ test('Concurrency & Claiming (FR-5, FR-6, NFR-5) - Exactly One Winner and HTTP 4
     const [res1, res2] = await Promise.all([
       fetch(`${baseUrl}/api/agent/tickets/${ticket.id}/claim`, {
         method: 'POST',
-        headers: { 'x-user-id': 'agent-1' }
+        headers: { Cookie: 'frontdesk_session=agent-1' }
       }),
       fetch(`${baseUrl}/api/agent/tickets/${ticket.id}/claim`, {
         method: 'POST',
-        headers: { 'x-user-id': 'agent-2' }
+        headers: { Cookie: 'frontdesk_session=agent-2' }
       })
     ]);
 

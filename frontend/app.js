@@ -6,7 +6,11 @@
 const API_BASE = '';
 
 let currentUser = null;
-let allUsers = [];
+const roleViews = {
+  customer: ['customer'],
+  agent: ['agent'],
+  manager: ['manager', 'agent', 'holidays']
+};
 let currentTicketId = null;
 let currentAgentFilter = 'all';
 
@@ -41,75 +45,140 @@ function updateIstClock() {
 setInterval(updateIstClock, 1000);
 updateIstClock();
 
-// Bootstrapping
 window.addEventListener('DOMContentLoaded', async () => {
-  await loadUsers();
-  loadHolidays();
+  document.getElementById('signInForm').addEventListener('submit', signIn);
+  document.getElementById('customerSignupForm').addEventListener('submit', signUpCustomer);
+  document.getElementById('showCustomerSignup').addEventListener('click', () => showSignup(true));
+  document.getElementById('showSignIn').addEventListener('click', () => showSignup(false));
+  document.getElementById('signOut').addEventListener('click', signOut);
   updateComposerStyle();
+
+  try {
+    const response = await fetch('/api/session');
+    if (response.status === 401) return;
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error);
+    await openPortal(data.user);
+  } catch (error) {
+    document.getElementById('signInStatus').textContent = error.message;
+  }
 });
 
-async function loadUsers() {
+function showSignup(show) {
+  const signInForm = document.getElementById('signInForm');
+  const signupForm = document.getElementById('customerSignupForm');
+  signInForm.hidden = show;
+  signupForm.hidden = !show;
+  document.getElementById('signInHeading').textContent = show ? 'Create customer account' : 'Sign in to Frontdesk';
+  document.getElementById('signInStatus').textContent = '';
+  document.getElementById('signupStatus').textContent = '';
+  (show ? signInForm : signupForm).elements.password.value = '';
+  (show ? signupForm : signInForm).elements.userId.focus();
+}
+
+async function signUpCustomer(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const button = form.querySelector('button[type="submit"]');
+  const status = document.getElementById('signupStatus');
+  button.disabled = true;
+  status.textContent = '';
+
   try {
-    const res = await fetch(`${API_BASE}/api/users`);
-    const data = await res.json();
-    allUsers = data.users || [];
-
-    const select = document.getElementById('currentUserSelect');
-    select.innerHTML = '';
-
-    allUsers.forEach(u => {
-      const opt = document.createElement('option');
-      opt.value = u.id;
-      opt.textContent = `[${u.role.toUpperCase()}] ${u.name}`;
-      select.appendChild(opt);
+    const response = await fetch('/api/customer-accounts', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ userId: form.elements.userId.value, password: form.elements.password.value })
     });
-
-    // Populate Reassign select
-    const reassignSelect = document.getElementById('dtReassignSelect');
-    if (reassignSelect) {
-      reassignSelect.innerHTML = '<option value="">Reassign to...</option>';
-      allUsers.filter(u => u.role === 'agent').forEach(a => {
-        const opt = document.createElement('option');
-        opt.value = a.id;
-        opt.textContent = a.name;
-        reassignSelect.appendChild(opt);
-      });
-    }
-
-    // Default to first agent
-    currentUser = allUsers.find(u => u.role === 'agent') || allUsers[0];
-    if (currentUser) {
-      select.value = currentUser.id;
-    }
-
-    loadActiveRoleView();
-  } catch (err) {
-    console.error('Failed to load users:', err);
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || 'Could not create the account.');
+    form.reset();
+    showSignup(false);
+    const signInForm = document.getElementById('signInForm');
+    signInForm.elements.userId.value = data.userId;
+    document.getElementById('signInStatus').textContent = 'Account created. Enter your password to sign in.';
+    signInForm.elements.password.focus();
+  } catch (error) {
+    status.textContent = error.message;
+  } finally {
+    button.disabled = false;
   }
 }
 
-function handleUserChange() {
-  const select = document.getElementById('currentUserSelect');
-  const user = allUsers.find(u => u.id === select.value);
-  if (user) {
-    currentUser = user;
-    // Auto switch active tab to match user role
-    if (currentUser.role === 'customer') {
-      switchRoleView('customer');
-    } else if (currentUser.role === 'manager') {
-      switchRoleView('manager');
-    } else {
-      switchRoleView('agent');
+async function signIn(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const button = form.querySelector('button');
+  const status = document.getElementById('signInStatus');
+  button.disabled = true;
+  status.textContent = '';
+
+  try {
+    const response = await fetch('/api/session', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ userId: form.elements.userId.value, password: form.elements.password.value })
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error);
+    form.reset();
+    await openPortal(data.user);
+  } catch (error) {
+    status.textContent = error.message;
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function signOut() {
+  try {
+    const response = await fetch('/api/session', { method: 'DELETE' });
+    if (!response.ok) throw new Error('Sign-out failed. Try again.');
+    window.location.reload();
+  } catch (error) {
+    alert(error.message);
+  }
+}
+
+async function portalFetch(url, options) {
+  const response = await fetch(url, options);
+  if (response.status === 401) window.location.reload();
+  return response;
+}
+
+async function openPortal(user) {
+  if (roleViews[user.role].includes('agent')) {
+    const response = await portalFetch('/api/users');
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error);
+
+    const select = document.getElementById('dtReassignSelect');
+    select.replaceChildren(new Option('Reassign to...', ''));
+    for (const agent of data.users) {
+      select.add(new Option(agent.name, agent.id));
     }
   }
+
+  currentUser = user;
+  document.getElementById('signInPanel').hidden = true;
+  document.getElementById('portal').hidden = false;
+  document.getElementById('sessionControls').hidden = false;
+  document.getElementById('signedInName').textContent = user.name;
+  switchRoleView(roleViews[user.role][0]);
 }
 
 function switchRoleView(viewName) {
+  const allowed = roleViews[currentUser?.role] || [];
+  if (!allowed.includes(viewName)) return;
+
   ['agent', 'customer', 'manager', 'holidays'].forEach(v => {
     const section = document.getElementById(`${v}View`);
     const tab = document.getElementById(`nav-${v}`);
     if (section) section.classList.toggle('active', v === viewName);
-    if (tab) tab.classList.toggle('active', v === viewName);
+    if (tab) {
+      tab.hidden = !allowed.includes(v);
+      tab.classList.toggle('active', v === viewName);
+    }
   });
 
   loadActiveRoleView();
@@ -142,14 +211,12 @@ function filterAgentTickets(filter) {
 }
 
 async function loadAgentTickets() {
-  if (!currentUser) return;
+  if (!['agent', 'manager'].includes(currentUser?.role)) return;
   const listEl = document.getElementById('ticketsList');
   listEl.innerHTML = '<div class="loading">Refreshing tickets...</div>';
 
   try {
-    const res = await fetch(`${API_BASE}/api/agent/tickets?filter=${currentAgentFilter}`, {
-      headers: { 'x-user-id': currentUser.id }
-    });
+    const res = await portalFetch(`${API_BASE}/api/agent/tickets?filter=${currentAgentFilter}`);
     const data = await res.json();
     const tickets = data.tickets || [];
 
@@ -202,14 +269,13 @@ async function loadAgentTickets() {
 }
 
 async function selectAgentTicket(ticketId) {
+  if (!['agent', 'manager'].includes(currentUser?.role)) return;
   currentTicketId = ticketId;
   const placeholder = document.getElementById('detailPlaceholder');
   const content = document.getElementById('detailContent');
 
   try {
-    const res = await fetch(`${API_BASE}/api/agent/tickets/${ticketId}`, {
-      headers: { 'x-user-id': currentUser.id }
-    });
+    const res = await portalFetch(`${API_BASE}/api/agent/tickets/${ticketId}`);
     if (!res.ok) throw new Error('Ticket not found');
     const data = await res.json();
     const t = data.ticket;
@@ -220,7 +286,7 @@ async function selectAgentTicket(ticketId) {
     // Populate header & meta
     document.getElementById('dtId').textContent = t.id;
     document.getElementById('dtSubject').textContent = t.subject;
-    document.getElementById('dtCustomer').textContent = `${t.customer_name || 'Customer'} (${t.customer_email || ''})`;
+    document.getElementById('dtCustomer').textContent = `${t.customer_name || 'Customer'}${t.customer_email ? ' (' + t.customer_email + ')' : ''}`;
     document.getElementById('dtAssignee').textContent = t.assigned_agent_name ? `${t.assigned_agent_name}` : '⚠️ Unassigned';
     document.getElementById('dtCreated').textContent = formatIst(t.created_at);
     document.getElementById('dtResponseDeadline').textContent = `${formatIst(t.response_deadline)} ${t.first_public_reply_at ? ' (Met at ' + formatIst(t.first_public_reply_at) + ')' : ''}`;
@@ -307,9 +373,8 @@ async function claimCurrentTicket() {
   if (!currentTicketId || !currentUser) return;
 
   try {
-    const res = await fetch(`${API_BASE}/api/agent/tickets/${currentTicketId}/claim`, {
+    const res = await portalFetch(`${API_BASE}/api/agent/tickets/${currentTicketId}/claim`, {
       method: 'POST',
-      headers: { 'x-user-id': currentUser.id }
     });
 
     const data = await res.json();
@@ -333,11 +398,10 @@ async function reassignCurrentTicket(newAgentId) {
   if (!newAgentId || !currentTicketId) return;
 
   try {
-    const res = await fetch(`${API_BASE}/api/agent/tickets/${currentTicketId}/reassign`, {
+    const res = await portalFetch(`${API_BASE}/api/agent/tickets/${currentTicketId}/reassign`, {
       method: 'POST',
       headers: {
-        'Content-Type': 'application/json',
-        'x-user-id': currentUser.id
+        'Content-Type': 'application/json'
       },
       body: JSON.stringify({ newAgentId })
     });
@@ -355,11 +419,10 @@ async function changeTicketStatus(status) {
   if (!currentTicketId) return;
 
   try {
-    const res = await fetch(`${API_BASE}/api/agent/tickets/${currentTicketId}/status`, {
+    const res = await portalFetch(`${API_BASE}/api/agent/tickets/${currentTicketId}/status`, {
       method: 'POST',
       headers: {
-        'Content-Type': 'application/json',
-        'x-user-id': currentUser.id
+        'Content-Type': 'application/json'
       },
       body: JSON.stringify({ status })
     });
@@ -380,11 +443,10 @@ async function changeTicketPriority(priority) {
   if (!currentTicketId) return;
 
   try {
-    const res = await fetch(`${API_BASE}/api/agent/tickets/${currentTicketId}/priority`, {
+    const res = await portalFetch(`${API_BASE}/api/agent/tickets/${currentTicketId}/priority`, {
       method: 'POST',
       headers: {
-        'Content-Type': 'application/json',
-        'x-user-id': currentUser.id
+        'Content-Type': 'application/json'
       },
       body: JSON.stringify({ priority })
     });
@@ -427,11 +489,10 @@ async function submitAgentMessage() {
   }
 
   try {
-    const res = await fetch(`${API_BASE}/api/agent/tickets/${currentTicketId}/message`, {
+    const res = await portalFetch(`${API_BASE}/api/agent/tickets/${currentTicketId}/message`, {
       method: 'POST',
       headers: {
-        'Content-Type': 'application/json',
-        'x-user-id': currentUser.id
+        'Content-Type': 'application/json'
       },
       body: JSON.stringify({ type, content })
     });
@@ -460,11 +521,10 @@ async function handleCustomerSubmit(event) {
   const description = document.getElementById('ticketDescription').value.trim();
 
   try {
-    const res = await fetch(`${API_BASE}/api/customer/tickets`, {
+    const res = await portalFetch(`${API_BASE}/api/customer/tickets`, {
       method: 'POST',
       headers: {
-        'Content-Type': 'application/json',
-        'x-user-id': currentUser.id
+        'Content-Type': 'application/json'
       },
       body: JSON.stringify({ subject, priority, description })
     });
@@ -482,14 +542,12 @@ async function handleCustomerSubmit(event) {
 }
 
 async function loadCustomerTickets() {
-  if (!currentUser) return;
+  if (!['customer'].includes(currentUser?.role)) return;
   const listEl = document.getElementById('customerTicketList');
   listEl.innerHTML = '<div class="loading">Loading your tickets...</div>';
 
   try {
-    const res = await fetch(`${API_BASE}/api/customer/tickets`, {
-      headers: { 'x-user-id': currentUser.id }
-    });
+    const res = await portalFetch(`${API_BASE}/api/customer/tickets`);
     const data = await res.json();
     const tickets = data.tickets || [];
 
@@ -517,14 +575,13 @@ async function loadCustomerTickets() {
 }
 
 async function selectCustomerTicket(ticketId) {
+  if (!['customer'].includes(currentUser?.role)) return;
   currentCustomerTicketId = ticketId;
   const card = document.getElementById('customerDetailCard');
   const placeholder = document.getElementById('customerDetailPlaceholder');
 
   try {
-    const res = await fetch(`${API_BASE}/api/customer/tickets/${ticketId}`, {
-      headers: { 'x-user-id': currentUser.id }
-    });
+    const res = await portalFetch(`${API_BASE}/api/customer/tickets/${ticketId}`);
     if (!res.ok) throw new Error('Ticket not found');
     const data = await res.json();
     const t = data.ticket;
@@ -571,11 +628,10 @@ async function submitCustomerReply() {
   if (!content) return;
 
   try {
-    const res = await fetch(`${API_BASE}/api/customer/tickets/${currentCustomerTicketId}/reply`, {
+    const res = await portalFetch(`${API_BASE}/api/customer/tickets/${currentCustomerTicketId}/reply`, {
       method: 'POST',
       headers: {
-        'Content-Type': 'application/json',
-        'x-user-id': currentUser.id
+        'Content-Type': 'application/json'
       },
       body: JSON.stringify({ content })
     });
@@ -600,11 +656,10 @@ async function customerReopenTicket() {
   if (!content) return;
 
   try {
-    const res = await fetch(`${API_BASE}/api/customer/tickets/${currentCustomerTicketId}/reply`, {
+    const res = await portalFetch(`${API_BASE}/api/customer/tickets/${currentCustomerTicketId}/reply`, {
       method: 'POST',
       headers: {
-        'Content-Type': 'application/json',
-        'x-user-id': currentUser.id
+        'Content-Type': 'application/json'
       },
       body: JSON.stringify({ content: `[Customer Reopen Request] ${content}` })
     });
@@ -629,26 +684,24 @@ async function customerReopenTicket() {
  * ===================================================================== */
 
 async function loadManagerReport() {
-  const managerUser = allUsers.find(u => u.role === 'manager') || currentUser;
+  if (!['manager'].includes(currentUser?.role)) return;
   const container = document.getElementById('lateTicketsTableContainer');
   container.innerHTML = '<div class="loading">Generating SLA report...</div>';
 
   try {
     // 1. Fetch Summary KPIs
-    const sumRes = await fetch(`${API_BASE}/api/manager/reports/summary`, {
-      headers: { 'x-user-id': managerUser.id }
-    });
+    const sumRes = await portalFetch(`${API_BASE}/api/manager/reports/summary`);
     const summary = await sumRes.json();
+    if (!sumRes.ok) throw new Error(summary.error);
     document.getElementById('kpiTotal').textContent = summary.total_tickets || 0;
     document.getElementById('kpiOpen').textContent = summary.open_tickets || 0;
     document.getElementById('kpiWaiting').textContent = summary.waiting_on_customer || 0;
     document.getElementById('kpiLate').textContent = summary.late_tickets || 0;
 
     // 2. Fetch Late Tickets Report
-    const lateRes = await fetch(`${API_BASE}/api/manager/reports/late-tickets`, {
-      headers: { 'x-user-id': managerUser.id }
-    });
+    const lateRes = await portalFetch(`${API_BASE}/api/manager/reports/late-tickets`);
     const data = await lateRes.json();
+    if (!lateRes.ok) throw new Error(data.error);
     const list = data.report || [];
 
     if (list.length === 0) {
@@ -701,10 +754,12 @@ function viewLateHistory(ticketId) {
  * ===================================================================== */
 
 async function loadHolidays() {
+  if (!['manager'].includes(currentUser?.role)) return;
   const listEl = document.getElementById('holidaysList');
   try {
-    const res = await fetch(`${API_BASE}/api/holidays`);
+    const res = await portalFetch(`${API_BASE}/api/holidays`);
     const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
     const holidays = data.holidays || [];
 
     if (holidays.length === 0) {
@@ -739,11 +794,12 @@ async function loadHolidays() {
 
 async function handleAddHoliday(event) {
   event.preventDefault();
+  if (currentUser?.role !== 'manager') return;
   const date = document.getElementById('holidayDate').value;
   const name = document.getElementById('holidayName').value.trim();
 
   try {
-    const res = await fetch(`${API_BASE}/api/holidays`, {
+    const res = await portalFetch(`${API_BASE}/api/holidays`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ date, name })
@@ -758,9 +814,10 @@ async function handleAddHoliday(event) {
 }
 
 async function deleteHoliday(id) {
+  if (currentUser?.role !== 'manager') return;
   if (!confirm('Remove this holiday from the working calendar?')) return;
   try {
-    const res = await fetch(`${API_BASE}/api/holidays/${id}`, { method: 'DELETE' });
+    const res = await portalFetch(`${API_BASE}/api/holidays/${id}`, { method: 'DELETE' });
     if (!res.ok) throw new Error((await res.json()).error);
     loadHolidays();
   } catch (err) {

@@ -108,20 +108,32 @@ body {
   gap: 1.5rem;
 }
 
-.user-picker {
+#sessionControls:not([hidden]) {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
-  font-size: 0.875rem;
+  gap: 0.75rem;
 }
 
-.user-picker select {
-  padding: 0.4rem 0.75rem;
-  border-radius: var(--radius);
-  border: 1px solid var(--border);
-  background: white;
-  font-size: 0.875rem;
-  font-weight: 500;
+[hidden] {
+  display: none !important;
+}
+
+.sign-in-panel {
+  width: min(100% - 2rem, 26rem);
+  margin: 3rem auto;
+}
+
+.sign-in-panel h2 {
+  margin-bottom: 1.25rem;
+}
+
+#signInStatus:not(:empty),
+#signupStatus:not(:empty) {
+  margin-top: 0.75rem;
+}
+
+.auth-switch {
+  margin-top: 1rem;
 }
 
 .ist-clock {

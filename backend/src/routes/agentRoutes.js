@@ -5,6 +5,7 @@
  */
 
 import express from 'express';
+import { requireRole } from '../auth.js';
 import {
   claimTicket,
   reassignTicket,
@@ -20,19 +21,7 @@ import { serializeAgentTicket, getAgentMessages } from '../serializers.js';
 export function createAgentRouter(db) {
   const router = express.Router();
 
-  // Agent auth middleware
-  router.use(async (req, res, next) => {
-    const agentId = req.headers['x-user-id'] || req.query.agent_id;
-    if (!agentId) {
-      return res.status(401).json({ error: 'Agent identification required (x-user-id header)' });
-    }
-    const user = await db.prepare('SELECT * FROM users WHERE id = ?').get(agentId);
-    if (!user || !['agent', 'manager'].includes(user.role)) {
-      return res.status(403).json({ error: 'Unauthorized: valid agent or manager role required' });
-    }
-    req.agent = user;
-    next();
-  });
+  router.use(requireRole('agent', 'manager'));
 
   // List all tickets with SLA breach indicators
   router.get('/tickets', async (req, res) => {
@@ -55,7 +44,7 @@ export function createAgentRouter(db) {
 
     if (filter === 'mine') {
       sql += ' AND t.assigned_agent_id = ?';
-      params.push(req.agent.id);
+      params.push(req.user.id);
     } else if (filter === 'unassigned') {
       sql += ' AND t.assigned_agent_id IS NULL';
     } else if (filter === 'late') {
@@ -112,7 +101,7 @@ export function createAgentRouter(db) {
 
   // Atomic Claim Ticket (FR-5, FR-6)
   router.post('/tickets/:id/claim', async (req, res) => {
-    const result = await claimTicket(db, req.params.id, req.agent.id);
+    const result = await claimTicket(db, req.params.id, req.user.id);
 
     if (result.notFound) {
       return res.status(404).json({ error: 'Ticket not found' });
@@ -141,7 +130,7 @@ export function createAgentRouter(db) {
       return res.status(400).json({ error: 'newAgentId is required' });
     }
 
-    const result = await reassignTicket(db, req.params.id, newAgentId, req.agent.id);
+    const result = await reassignTicket(db, req.params.id, newAgentId, req.user.id);
     if (result.notFound) {
       return res.status(404).json({ error: 'Ticket not found' });
     }
@@ -161,7 +150,7 @@ export function createAgentRouter(db) {
       return res.status(400).json({ error: `Invalid status. Allowed: ${allowed.join(', ')}` });
     }
 
-    const result = await updateTicketStatus(db, req.params.id, status, req.agent.id, req.agent.name);
+    const result = await updateTicketStatus(db, req.params.id, status, req.user.id, req.user.name);
     if (result.notFound) {
       return res.status(404).json({ error: 'Ticket not found' });
     }
@@ -183,7 +172,7 @@ export function createAgentRouter(db) {
       return res.status(400).json({ error: `Invalid priority. Allowed: ${allowed.join(', ')}` });
     }
 
-    const result = await updateTicketPriority(db, req.params.id, priority, req.agent.id, req.agent.name);
+    const result = await updateTicketPriority(db, req.params.id, priority, req.user.id, req.user.name);
     if (result.notFound) {
       return res.status(404).json({ error: 'Ticket not found' });
     }
@@ -206,7 +195,7 @@ export function createAgentRouter(db) {
 
     const result = await addAgentMessage(db, {
       ticketId: req.params.id,
-      agentId: req.agent.id,
+      agentId: req.user.id,
       type,
       content
     });

@@ -4,10 +4,11 @@
  */
 
 import express from 'express';
-import cors from 'cors';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createDatabase } from './db.js';
+import { configureAuth, createSupabaseAuth } from './auth.js';
+import { removeExpiredCustomerSessions } from './customerAuth.js';
 import { createCustomerRouter } from './routes/customerRoutes.js';
 import { createAgentRouter } from './routes/agentRoutes.js';
 import { createManagerRouter } from './routes/managerRoutes.js';
@@ -18,9 +19,8 @@ import { evaluateLiveBreaches, applyAutoClose } from './services/ticketService.j
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-export function createApp(db) {
+export function createApp(db, { auth = createSupabaseAuth() } = {}) {
   const app = express();
-  app.use(cors());
 
   app.get('/api/health', async (req, res) => {
     try {
@@ -32,6 +32,7 @@ export function createApp(db) {
   });
 
   app.use(express.json());
+  configureAuth(app, db, auth);
   app.use('/api/customer', createCustomerRouter(db));
   app.use('/api/agent', createAgentRouter(db));
   app.use('/api/manager', createManagerRouter(db));
@@ -62,6 +63,7 @@ export function startBackgroundTasks(db) {
     try {
       await evaluateLiveBreaches(db);
       await applyAutoClose(db);
+      await removeExpiredCustomerSessions(db);
     } catch (err) {
       console.error('[Background Task Error]', err);
     } finally {

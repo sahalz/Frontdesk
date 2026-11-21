@@ -5,25 +5,14 @@
  */
 
 import express from 'express';
+import { requireRole } from '../auth.js';
 import { evaluateLiveBreaches } from '../services/ticketService.js';
 import { serializeAgentTicket } from '../serializers.js';
 
 export function createManagerRouter(db) {
   const router = express.Router();
 
-  // Manager auth check
-  router.use(async (req, res, next) => {
-    const userId = req.headers['x-user-id'] || req.query.manager_id;
-    if (!userId) {
-      return res.status(401).json({ error: 'Manager identification required' });
-    }
-    const user = await db.prepare('SELECT * FROM users WHERE id = ?').get(userId);
-    if (!user || user.role !== 'manager') {
-      return res.status(403).json({ error: 'Unauthorized: manager role required' });
-    }
-    req.manager = user;
-    next();
-  });
+  router.use(requireRole('manager'));
 
   // Late tickets report (FR-19)
   router.get('/reports/late-tickets', async (req, res) => {

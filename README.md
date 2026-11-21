@@ -52,8 +52,8 @@ Frontdesk is a web-based support ticketing platform built for Arvo Systems to re
 ## 3. Technology Stack
 
 * **Backend**: Node.js (ES Modules, Express).
-* **Database**: PostgreSQL via the `pg` connection pool. Startup applies `backend/src/schema.sql` and seeds the demo personas and SLA defaults.
-* **Frontend**: Vanilla HTML5, CSS3, JavaScript SPA with instant persona switching (Agent, Customer, Manager, Calendar).
+* **Database**: PostgreSQL via the `pg` connection pool. Startup applies `backend/src/schema.sql` and seeds the default SLA settings.
+* **Frontend**: Vanilla HTML5, CSS3, JavaScript SPA with separate customer, agent, and manager portals.
 * **Testing**: Node.js test runner (`node --test`) with embedded PostgreSQL (PGlite) for database and HTTP tests.
 
 ---
@@ -84,7 +84,43 @@ $env:DATABASE_URL = 'postgresql://frontdesk_user:your-password@localhost:5432/fr
 npm start
 ```
 
-Open **http://localhost:3000**. The startup script creates the schema and seeds the demo users. Any existing `frontdesk.sqlite` file is left on disk. Its records are not automatically imported into PostgreSQL.
+Open **http://localhost:3000**. The startup script creates or updates the schema. Any existing `frontdesk.sqlite` file is left on disk. Its records are not automatically imported into PostgreSQL.
+
+---
+
+### Customer self-registration
+
+On the sign-in page, select **Create customer account** and enter a new user ID and password. Frontdesk creates an account with the `customer` role and stores a salted password hash in PostgreSQL. The customer signs in with the same credentials. No email or Supabase Auth account is required for self-registration.
+
+Restart Frontdesk after upgrading so startup can create the new credential and session tables. Self-registered accounts have no email-based password reset.
+
+### Supabase sign-in for provisioned users
+
+Set these values in `backend/.env`, alongside `DATABASE_URL`:
+
+```dotenv
+SUPABASE_URL=https://your-project-ref.supabase.co
+SUPABASE_PUBLISHABLE_KEY=your-project-publishable-key
+```
+
+1. In Supabase, create users under **Authentication ? Users** and copy each account's UUID. Users sign in to Frontdesk with their Frontdesk user ID and the password set in Supabase.
+2. Run the backend once or apply [the schema](/backend/src/schema.sql) so `public.users.auth_user_id` exists.
+3. Link each account in the Supabase SQL Editor. To add a new Frontdesk user, replace the example values below:
+
+```sql
+INSERT INTO public.users (id, name, email, role, auth_user_id)
+VALUES ('support-01', 'Support Agent', 'support@example.com', 'agent', '00000000-0000-0000-0000-000000000001');
+```
+
+To preserve tickets assigned to an existing Frontdesk user, link that row by ID:
+
+```sql
+UPDATE public.users
+SET auth_user_id = '00000000-0000-0000-0000-000000000002'
+WHERE id = 'cust-1';
+```
+
+The email in `public.users` must match the linked Supabase Auth account. A database administrator assigns `customer`, `agent`, or `manager` in `public.users`. Supabase Auth accounts without a Frontdesk link have no access through Supabase sign-in. The browser session expires with the Supabase access token. Set `NODE_ENV=production` when serving the app over HTTPS so it uses secure session cookies.
 
 ---
 

@@ -7,7 +7,7 @@
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <!-- Top Navigation & Role Switcher Bar -->
+  <!-- Top navigation -->
   <header class="app-header">
     <div class="header-left">
       <div class="brand">
@@ -16,24 +16,56 @@
         <span class="brand-tag">Arvo Systems Support</span>
       </div>
       <nav class="role-nav">
-        <button id="nav-agent" class="nav-tab active" onclick="switchRoleView('agent')">Agent Portal</button>
-        <button id="nav-customer" class="nav-tab" onclick="switchRoleView('customer')">Customer View</button>
-        <button id="nav-manager" class="nav-tab" onclick="switchRoleView('manager')">Manager Reports</button>
-        <button id="nav-holidays" class="nav-tab" onclick="switchRoleView('holidays')">Holidays Calendar</button>
+        <button hidden id="nav-agent" class="nav-tab active" onclick="switchRoleView('agent')">Agent Portal</button>
+        <button hidden id="nav-customer" class="nav-tab" onclick="switchRoleView('customer')">Customer View</button>
+        <button hidden id="nav-manager" class="nav-tab" onclick="switchRoleView('manager')">Manager Reports</button>
+        <button hidden id="nav-holidays" class="nav-tab" onclick="switchRoleView('holidays')">Holidays Calendar</button>
       </nav>
     </div>
     <div class="header-right">
-      <div class="user-picker">
-        <label for="currentUserSelect">Active User:</label>
-        <select id="currentUserSelect" onchange="handleUserChange()"></select>
+      <div id="sessionControls" hidden>
+        <span id="signedInName"></span>
+        <button type="button" id="signOut" class="btn btn-secondary">Sign out</button>
       </div>
       <div id="istClock" class="ist-clock">IST: Loading...</div>
     </div>
   </header>
 
-  <main class="app-container">
+  <section id="signInPanel" class="card sign-in-panel" aria-labelledby="signInHeading">
+    <h2 id="signInHeading">Sign in to Frontdesk</h2>
+    <form id="signInForm">
+      <div class="form-group">
+        <label for="signInUserId">User ID</label>
+        <input id="signInUserId" name="userId" type="text" autocomplete="username" autocapitalize="none" spellcheck="false" maxlength="64" required>
+      </div>
+      <div class="form-group">
+        <label for="signInPassword">Password</label>
+        <input id="signInPassword" name="password" type="password" autocomplete="current-password" required>
+      </div>
+      <button type="submit" class="btn btn-primary">Sign in</button>
+      <p id="signInStatus" role="status"></p>
+      <button type="button" id="showCustomerSignup" class="btn btn-secondary auth-switch">Create customer account</button>
+    </form>
+    <form id="customerSignupForm" hidden>
+      <div class="form-group">
+        <label for="signupUserId">User ID</label>
+        <input id="signupUserId" name="userId" type="text" autocomplete="username" autocapitalize="none" spellcheck="false" minlength="3" maxlength="64" pattern="[a-z0-9][a-z0-9_\-]{2,63}" aria-describedby="signupUserIdHint" required>
+        <small id="signupUserIdHint">Use 3 to 64 lowercase letters, numbers, hyphens, or underscores. Start with a letter or number.</small>
+      </div>
+      <div class="form-group">
+        <label for="signupPassword">Password</label>
+        <input id="signupPassword" name="password" type="password" autocomplete="new-password" minlength="6" maxlength="128" aria-describedby="signupPasswordHint" required>
+        <small id="signupPasswordHint">Use 6 to 128 characters.</small>
+      </div>
+      <button type="submit" class="btn btn-primary">Create account</button>
+      <p id="signupStatus" role="status"></p>
+      <button type="button" id="showSignIn" class="btn btn-secondary auth-switch">Back to sign in</button>
+    </form>
+  </section>
+
+  <main id="portal" class="app-container" hidden>
     <!-- ================= AGENT VIEW ================= -->
-    <section id="agentView" class="view-section active">
+    <section id="agentView" class="view-section">
       <div class="portal-toolbar">
         <div class="filter-group">
           <label>Filter Tickets:</label>

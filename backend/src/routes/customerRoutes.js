@@ -5,6 +5,7 @@
  */
 
 import express from 'express';
+import { requireRole } from '../auth.js';
 import { createTicket, getTicketById } from '../services/ticketService.js';
 import { addCustomerReply } from '../services/messageService.js';
 import { serializeCustomerTicket, getCustomerMessages } from '../serializers.js';
@@ -12,19 +13,7 @@ import { serializeCustomerTicket, getCustomerMessages } from '../serializers.js'
 export function createCustomerRouter(db) {
   const router = express.Router();
 
-  // Authentication/Customer identification middleware
-  router.use(async (req, res, next) => {
-    const customerId = req.headers['x-user-id'] || req.query.customer_id;
-    if (!customerId) {
-      return res.status(401).json({ error: 'Customer identification required (x-user-id header)' });
-    }
-    const user = await db.prepare('SELECT * FROM users WHERE id = ?').get(customerId);
-    if (!user || user.role !== 'customer') {
-      return res.status(403).json({ error: 'Unauthorized: valid customer role required' });
-    }
-    req.customer = user;
-    next();
-  });
+  router.use(requireRole('customer'));
 
   // Create ticket
   router.post('/tickets', async (req, res) => {
@@ -36,7 +25,7 @@ export function createCustomerRouter(db) {
     const ticket = await createTicket(db, {
       subject,
       description,
-      customerId: req.customer.id,
+      customerId: req.user.id,
       priority: priority || 'medium'
     });
 
@@ -49,7 +38,7 @@ export function createCustomerRouter(db) {
   router.get('/tickets', async (req, res) => {
     const tickets = await db.prepare(`
       SELECT * FROM tickets WHERE customer_id = ? ORDER BY created_at DESC
-    `).all(req.customer.id);
+    `).all(req.user.id);
 
     res.json({
       tickets: tickets.map(serializeCustomerTicket)
@@ -60,7 +49,7 @@ export function createCustomerRouter(db) {
   router.get('/tickets/:id', async (req, res) => {
     const ticket = await db.prepare('SELECT * FROM tickets WHERE id = ? AND customer_id = ?').get(
       req.params.id,
-      req.customer.id
+      req.user.id
     );
 
     if (!ticket) {
@@ -85,7 +74,7 @@ export function createCustomerRouter(db) {
 
     const ticket = await db.prepare('SELECT * FROM tickets WHERE id = ? AND customer_id = ?').get(
       req.params.id,
-      req.customer.id
+      req.user.id
     );
 
     if (!ticket) {
@@ -94,7 +83,7 @@ export function createCustomerRouter(db) {
 
     const result = await addCustomerReply(db, {
       ticketId: ticket.id,
-      customerId: req.customer.id,
+      customerId: req.user.id,
       content
     });
 
