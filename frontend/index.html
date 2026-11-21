@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Frontdesk - Arvo Systems Support</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <!-- Top Navigation & Role Switcher Bar -->
+  <header class="app-header">
+    <div class="header-left">
+      <div class="brand">
+        <span class="brand-logo">⚡</span>
+        <h1>Frontdesk</h1>
+        <span class="brand-tag">Arvo Systems Support</span>
+      </div>
+      <nav class="role-nav">
+        <button id="nav-agent" class="nav-tab active" onclick="switchRoleView('agent')">Agent Portal</button>
+        <button id="nav-customer" class="nav-tab" onclick="switchRoleView('customer')">Customer View</button>
+        <button id="nav-manager" class="nav-tab" onclick="switchRoleView('manager')">Manager Reports</button>
+        <button id="nav-holidays" class="nav-tab" onclick="switchRoleView('holidays')">Holidays Calendar</button>
+      </nav>
+    </div>
+    <div class="header-right">
+      <div class="user-picker">
+        <label for="currentUserSelect">Active User:</label>
+        <select id="currentUserSelect" onchange="handleUserChange()"></select>
+      </div>
+      <div id="istClock" class="ist-clock">IST: Loading...</div>
+    </div>
+  </header>
+
+  <main class="app-container">
+    <!-- ================= AGENT VIEW ================= -->
+    <section id="agentView" class="view-section active">
+      <div class="portal-toolbar">
+        <div class="filter-group">
+          <label>Filter Tickets:</label>
+          <button class="filter-btn active" onclick="filterAgentTickets('all')">All Tickets</button>
+          <button class="filter-btn" onclick="filterAgentTickets('mine')">My Assigned</button>
+          <button class="filter-btn" onclick="filterAgentTickets('unassigned')">Unassigned</button>
+          <button class="filter-btn late-btn" onclick="filterAgentTickets('late')">⚠️ Late / Breached</button>
+          <button class="filter-btn waiting-btn" onclick="filterAgentTickets('waiting')">⏳ Waiting on Customer</button>
+        </div>
+        <div class="actions">
+          <button class="btn btn-secondary" onclick="loadAgentTickets()">↻ Refresh</button>
+        </div>
+      </div>
+
+      <div class="portal-grid">
+        <!-- Tickets Master List -->
+        <div class="tickets-panel">
+          <div class="panel-header">
+            <h2>Support Tickets</h2>
+            <span id="ticketCountBadge" class="badge">0</span>
+          </div>
+          <div id="ticketsList" class="tickets-list">
+            <div class="loading">Loading tickets...</div>
+          </div>
+        </div>
+
+        <!-- Ticket Detail Pane -->
+        <div class="detail-panel">
+          <div id="detailPlaceholder" class="empty-detail">
+            <p>Select a ticket from the left panel to inspect conversation, SLAs, and manage status.</p>
+          </div>
+
+          <div id="detailContent" class="detail-content" style="display: none;">
+            <div class="ticket-header-card">
+              <div class="ticket-title-row">
+                <span id="dtId" class="ticket-id-tag">TCK-0000</span>
+                <h3 id="dtSubject">Ticket Subject</h3>
+                <span id="dtStatusBadge" class="badge">Open</span>
+                <span id="dtPriorityBadge" class="badge">Medium</span>
+                <span id="dtLateBadge" class="badge badge-late" style="display: none;">BREACHED</span>
+              </div>
+              <div class="ticket-meta-grid">
+                <div><strong>Customer:</strong> <span id="dtCustomer">Acme Corp</span></div>
+                <div><strong>Assigned To:</strong> <span id="dtAssignee">Unassigned</span></div>
+                <div><strong>Created:</strong> <span id="dtCreated">--</span></div>
+                <div><strong>Response SLA:</strong> <span id="dtResponseDeadline">--</span></div>
+                <div><strong>Resolution SLA:</strong> <span id="dtResolutionDeadline">--</span></div>
+                <div><strong>Paused Working Time:</strong> <span id="dtTotalPaused">0 min</span></div>
+              </div>
+
+              <!-- Action Bar (Claim, Status, Priority) -->
+              <div class="ticket-controls">
+                <button id="btnClaim" class="btn btn-primary" onclick="claimCurrentTicket()">⚡ Claim Ticket</button>
+                
+                <div class="control-select">
+                  <label>Status:</label>
+                  <select id="dtStatusSelect" onchange="changeTicketStatus(this.value)">
+                    <option value="Open">Open</option>
+                    <option value="In progress">In progress</option>
+                    <option value="Waiting on customer">Waiting on customer (Pauses SLA)</option>
+                    <option value="Resolved">Resolved</option>
+                    <option value="Closed">Closed</option>
+                    <option value="Reopened">Reopened</option>
+                  </select>
+                </div>
+
+                <div class="control-select">
+                  <label>Priority:</label>
+                  <select id="dtPrioritySelect" onchange="changeTicketPriority(this.value)">
+                    <option value="urgent">Urgent (2h reply, same day resolution)</option>
+                    <option value="medium">Medium (4.5h reply, 3 days resolution)</option>
+                    <option value="low">Low (1 day reply, 5 days resolution)</option>
+                  </select>
+                </div>
+
+                <div class="control-select">
+                  <label>Reassign:</label>
+                  <select id="dtReassignSelect" onchange="reassignCurrentTicket(this.value)">
+                    <option value="">Reassign to...</option>
+                  </select>
+                </div>
+              </div>
+            </div>
+
+            <!-- Conversation Thread -->
+            <div class="thread-section">
+              <h4>Conversation Thread</h4>
+              <div id="threadMessages" class="thread-messages"></div>
+
+              <!-- Message Input (Public reply vs Internal Note) -->
+              <div class="message-composer">
+                <div class="composer-type-selector">
+                  <label class="radio-label">
+                    <input type="radio" name="msgType" value="public_reply" checked onchange="updateComposerStyle()">
+                    <span class="radio-pill public-pill">💬 Public Reply (Visible to Customer & Satisfies Response SLA)</span>
+                  </label>
+                  <label class="radio-label">
+                    <input type="radio" name="msgType" value="internal_note" onchange="updateComposerStyle()">
+                    <span class="radio-pill note-pill">🔒 Internal Note (Agent Only - Never visible to customer)</span>
+                  </label>
+                </div>
+                <textarea id="composerText" placeholder="Type your public response to the customer..."></textarea>
+                <div class="composer-footer">
+                  <span id="composerHint" class="composer-hint">Visible to customer</span>
+                  <button id="btnSendMessage" class="btn btn-primary" onclick="submitAgentMessage()">Send Message</button>
+                </div>
+              </div>
+            </div>
+
+            <!-- Immutable Audit Trail -->
+            <div class="audit-section">
+              <h4>Immutable Audit Log (FR-13, NFR-3)</h4>
+              <div id="auditLogList" class="audit-list"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= CUSTOMER VIEW ================= -->
+    <section id="customerView" class="view-section">
+      <div class="customer-container">
+        <div class="customer-left">
+          <div class="card">
+            <h3>Submit a New Support Ticket</h3>
+            <form id="newTicketForm" onsubmit="handleCustomerSubmit(event)">
+              <div class="form-group">
+                <label for="ticketSubject">Subject:</label>
+                <input type="text" id="ticketSubject" required placeholder="Brief description of the problem">
+              </div>
+              <div class="form-group">
+                <label for="ticketPriority">Priority / Impact:</label>
+                <select id="ticketPriority">
+                  <option value="medium">Medium - Normal business request</option>
+                  <option value="urgent">Urgent - Customer cannot work at all</option>
+                  <option value="low">Low - Question or general inquiry</option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label for="ticketDescription">Problem Details:</label>
+                <textarea id="ticketDescription" rows="5" required placeholder="Please describe what happened, steps to reproduce, or your question..."></textarea>
+              </div>
+              <button type="submit" class="btn btn-primary">Submit Ticket</button>
+            </form>
+          </div>
+
+          <div class="card" style="margin-top: 1.5rem;">
+            <h3>My Open & Past Tickets</h3>
+            <div id="customerTicketList" class="customer-ticket-list">
+              <div class="loading">Loading tickets...</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="customer-right">
+          <div id="customerDetailCard" class="card" style="display: none;">
+            <div class="customer-detail-header">
+              <div>
+                <span id="custDetailId" class="ticket-id-tag">TCK-0000</span>
+                <h3 id="custDetailSubject" style="display:inline-block; margin-left: 0.5rem;">Subject</h3>
+              </div>
+              <div>
+                <span id="custDetailStatus" class="badge">Open</span>
+              </div>
+            </div>
+
+            <p id="custDetailDesc" class="customer-desc-box"></p>
+
+            <div class="customer-messages-box">
+              <h4>Messages & Updates</h4>
+              <div id="custMessagesList" class="thread-messages"></div>
+
+              <div id="custReplyBox" class="customer-reply-composer">
+                <textarea id="custReplyText" rows="3" placeholder="Write a reply..."></textarea>
+                <div style="text-align: right; margin-top: 0.5rem;">
+                  <button class="btn btn-primary" onclick="submitCustomerReply()">Send Reply</button>
+                </div>
+              </div>
+
+              <!-- Reopen Button if Resolved within 5 days -->
+              <div id="custReopenNotice" class="alert-box" style="display:none;">
+                <span>This ticket is marked Resolved. You may reopen it or start a new request.</span>
+                <button class="btn btn-secondary" onclick="customerReopenTicket()">↻ Reopen Ticket</button>
+              </div>
+            </div>
+          </div>
+          <div id="customerDetailPlaceholder" class="empty-detail card">
+            <p>Select one of your tickets to read updates and reply.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= MANAGER REPORTING VIEW ================= -->
+    <section id="managerView" class="view-section">
+      <div class="manager-container">
+        <div class="kpi-grid">
+          <div class="kpi-card">
+            <div class="kpi-title">Total Tickets</div>
+            <div id="kpiTotal" class="kpi-value">0</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-title">Active / Open</div>
+            <div id="kpiOpen" class="kpi-value">0</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-title">Waiting on Customer</div>
+            <div id="kpiWaiting" class="kpi-value">0</div>
+          </div>
+          <div class="kpi-card kpi-danger">
+            <div class="kpi-title">⚠️ Late / Breached</div>
+            <div id="kpiLate" class="kpi-value">0</div>
+          </div>
+        </div>
+
+        <div class="card" style="margin-top: 1.5rem;">
+          <div class="panel-header">
+            <h3>SLA Breach Report (FR-19)</h3>
+            <button class="btn btn-secondary" onclick="loadManagerReport()">↻ Refresh Report</button>
+          </div>
+          <p class="subtitle">Complete audit of tickets that have breached either Response SLA or Resolution SLA targets, with pause durations and event history.</p>
+          <div id="lateTicketsTableContainer" class="table-container">
+            <div class="loading">Loading late tickets report...</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= HOLIDAYS VIEW ================= -->
+    <section id="holidaysView" class="view-section">
+      <div class="card" style="max-width: 800px; margin: 0 auto;">
+        <h3>Festival Holidays & Calendar Management</h3>
+        <p class="subtitle">Festival holidays and weekends are excluded from working time (09:30 - 18:30 IST) calculation (SRS 3.2).</p>
+        
+        <form id="addHolidayForm" onsubmit="handleAddHoliday(event)" class="inline-form">
+          <input type="date" id="holidayDate" required>
+          <input type="text" id="holidayName" placeholder="Holiday description (e.g. Diwali, Republic Day)" required>
+          <button type="submit" class="btn btn-primary">Add Holiday</button>
+        </form>
+
+        <div id="holidaysList" class="holidays-list" style="margin-top: 1.5rem;">
+          <div class="loading">Loading holidays...</div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>

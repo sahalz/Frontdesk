@@ -1,0 +1,15 @@
+{
+  "name": "frontdesk-backend",
+  "version": "1.0.0",
+  "description": "Frontdesk Support Ticketing System for Arvo Systems",
+  "main": "src/server.js",
+  "type": "module",
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node --test tests/*.test.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.19.2"
+  }
+}
