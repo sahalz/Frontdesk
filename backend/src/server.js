@@ -21,6 +21,7 @@ const __dirname = path.dirname(__filename);
 
 export function createApp(db, { auth = createSupabaseAuth() } = {}) {
   const app = express();
+  if (process.env.RENDER === 'true') app.set('trust proxy', 1);
 
   app.get('/api/health', async (req, res) => {
     try {
