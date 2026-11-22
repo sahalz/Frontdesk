@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createTestDatabase, testAuth } from './testDatabase.js';
+import { createTestDatabase, testAuth, testSessionHeaders } from './testDatabase.js';
 import { createApp } from '../src/server.js';
 import { createTicket } from '../src/services/ticketService.js';
 import { addAgentMessage } from '../src/services/messageService.js';
@@ -44,7 +44,7 @@ test('Security & Privacy (NFR-2, FR-10, NFR-5) - Zero Internal Note Leakage to C
 
     // 3. Test GET /api/customer/tickets (ticket list)
     const listRes = await fetch(`${baseUrl}/api/customer/tickets`, {
-      headers: { Cookie: 'frontdesk_session=cust-1' }
+      headers: testSessionHeaders('cust-1')
     });
     const listBody = await listRes.text();
     assert.equal(listRes.status, 200);
@@ -56,7 +56,7 @@ test('Security & Privacy (NFR-2, FR-10, NFR-5) - Zero Internal Note Leakage to C
 
     // 4. Test GET /api/customer/tickets/:id (ticket detail)
     const detailRes = await fetch(`${baseUrl}/api/customer/tickets/${ticket.id}`, {
-      headers: { Cookie: 'frontdesk_session=cust-1' }
+      headers: testSessionHeaders('cust-1')
     });
     const detailData = await detailRes.json();
     assert.equal(detailRes.status, 200);
@@ -83,7 +83,7 @@ test('Security & Privacy (NFR-2, FR-10, NFR-5) - Zero Internal Note Leakage to C
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        Cookie: 'frontdesk_session=cust-1'
+        ...testSessionHeaders('cust-1')
       },
       body: JSON.stringify({ content: 'Thanks for the quick reply!' })
     });
@@ -97,21 +97,21 @@ test('Security & Privacy (NFR-2, FR-10, NFR-5) - Zero Internal Note Leakage to C
 
     // 6. Test Customer Isolation (Customer 2 cannot see Customer 1's ticket)
     const cust2Res = await fetch(`${baseUrl}/api/customer/tickets/${ticket.id}`, {
-      headers: { Cookie: 'frontdesk_session=cust-2' }
+      headers: testSessionHeaders('cust-2')
     });
     assert.equal(cust2Res.status, 404, 'Customer 2 must not have access to Customer 1 ticket');
 
     for (const path of ['/api/manager/reports/summary', '/api/holidays']) {
       for (const userId of ['cust-1', 'agent-1']) {
-        const response = await fetch(baseUrl + path, { headers: { Cookie: 'frontdesk_session=' + userId } });
+        const response = await fetch(baseUrl + path, { headers: testSessionHeaders(userId) });
         assert.equal(response.status, 403);
       }
-      const response = await fetch(baseUrl + path, { headers: { Cookie: 'frontdesk_session=mgr-1' } });
+      const response = await fetch(baseUrl + path, { headers: testSessionHeaders('mgr-1') });
       assert.equal(response.status, 200);
     }
 
     const customerAgentRes = await fetch(baseUrl + '/api/agent/tickets', {
-      headers: { Cookie: 'frontdesk_session=cust-1' }
+      headers: testSessionHeaders('cust-1')
     });
     assert.equal(customerAgentRes.status, 403);
 
@@ -120,23 +120,31 @@ test('Security & Privacy (NFR-2, FR-10, NFR-5) - Zero Internal Note Leakage to C
     });
     assert.equal(spoofedRequest.status, 401);
 
-    const session = await fetch(baseUrl + '/api/session', {
+    const signInAs = role => fetch(baseUrl + '/api/session', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ userId: 'cust-1', password: 'fixture-password', role: 'manager' })
+      body: JSON.stringify({ userId: 'cust-1', password: 'fixture-password', role })
     });
+    const wrongRole = await signInAs('manager');
+    assert.equal(wrongRole.status, 401);
+    assert.equal(wrongRole.headers.get('set-cookie'), null);
+    assert.equal((await signInAs('admin')).status, 400);
+
+    const session = await signInAs('customer');
     assert.equal(session.status, 200);
-    assert.equal((await session.json()).user.role, 'customer');
+    const sessionData = await session.json();
+    assert.equal(sessionData.user.role, 'customer');
     const sessionCookie = session.headers.get('set-cookie');
     assert.match(sessionCookie, /HttpOnly/i);
     const cookie = sessionCookie.split(';')[0];
+    const sessionHeaders = { Cookie: cookie, 'X-Frontdesk-Session': sessionData.sessionId };
 
-    const authenticated = await fetch(baseUrl + '/api/session', { headers: { Cookie: cookie } });
+    const authenticated = await fetch(baseUrl + '/api/session', { headers: sessionHeaders });
     assert.equal((await authenticated.json()).user.id, 'cust-1');
 
-    const signOut = await fetch(baseUrl + '/api/session', { method: 'DELETE', headers: { Cookie: cookie } });
+    const signOut = await fetch(baseUrl + '/api/session', { method: 'DELETE', headers: sessionHeaders });
     assert.equal(signOut.status, 204);
-    assert.match(signOut.headers.get('set-cookie'), /^frontdesk_session=;/);
+    assert.match(signOut.headers.get('set-cookie'), new RegExp('^frontdesk_session_' + sessionData.sessionId + '=;'));
 
   } finally {
     server.close();
@@ -214,11 +222,30 @@ test('Self-registration creates a customer session using only a user ID and pass
   const wrongPassword = await post('/api/session', { ...credentials, password: 'wrong-password' });
   assert.equal(wrongPassword.status, 401);
 
-  const signedIn = await post('/api/session', credentials);
+  const wrongRole = await post('/api/session', { ...credentials, role: 'agent' });
+  assert.equal(wrongRole.status, 401);
+  assert.equal(wrongRole.headers.get('set-cookie'), null);
+
+  const signedIn = await post('/api/session', { ...credentials, role: 'customer' });
   assert.equal(signedIn.status, 200);
-  assert.equal((await signedIn.json()).user.role, 'customer');
-  const cookie = signedIn.headers.get('set-cookie').split(';')[0];
-  const headers = { Cookie: cookie };
+  const customerSession = await signedIn.json();
+  assert.equal(customerSession.user.role, 'customer');
+  const customerCookie = signedIn.headers.get('set-cookie').split(';')[0];
+
+  const agentLogin = await post('/api/session', { userId: 'agent-1', password: 'fixture-password', role: 'agent' });
+  assert.equal(agentLogin.status, 200);
+  const agentSession = await agentLogin.json();
+  assert.equal(agentSession.user.role, 'agent');
+  assert.notEqual(agentSession.sessionId, customerSession.sessionId);
+  const agentCookie = agentLogin.headers.get('set-cookie').split(';')[0];
+
+  // Browser tabs share the cookie jar. Each tab selects its own session.
+  const cookieJar = agentCookie + '; ' + customerCookie;
+  const agentHeaders = { Cookie: cookieJar, 'X-Frontdesk-Session': agentSession.sessionId };
+  const headers = { Cookie: cookieJar, 'X-Frontdesk-Session': customerSession.sessionId };
+  assert.equal((await fetch(baseUrl + '/api/session', { headers: { Cookie: cookieJar } })).status, 401);
+  const agentTickets = await fetch(baseUrl + '/api/agent/tickets', { headers: agentHeaders });
+  assert.equal(agentTickets.status, 200);
   const tickets = await fetch(baseUrl + '/api/customer/tickets', { headers });
   assert.equal(tickets.status, 200);
   assert.deepEqual(await tickets.json(), { tickets: [] });
@@ -229,4 +256,7 @@ test('Self-registration creates a customer session using only a user ID and pass
   const signedOut = await fetch(baseUrl + '/api/session', { method: 'DELETE', headers });
   assert.equal(signedOut.status, 204);
   assert.equal((await fetch(baseUrl + '/api/session', { headers })).status, 401);
+  const remaining = await fetch(baseUrl + '/api/session', { headers: agentHeaders });
+  assert.equal(remaining.status, 200);
+  assert.equal((await remaining.json()).user.id, 'agent-1');
 });

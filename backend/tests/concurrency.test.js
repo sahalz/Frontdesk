@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createTestDatabase, testAuth } from './testDatabase.js';
+import { createTestDatabase, testAuth, testSessionHeaders } from './testDatabase.js';
 import { createApp } from '../src/server.js';
 import { createTicket } from '../src/services/ticketService.js';
 
@@ -26,11 +26,11 @@ test('Concurrency & Claiming (FR-5, FR-6, NFR-5) - Exactly One Winner and HTTP 4
     const [res1, res2] = await Promise.all([
       fetch(`${baseUrl}/api/agent/tickets/${ticket.id}/claim`, {
         method: 'POST',
-        headers: { Cookie: 'frontdesk_session=agent-1' }
+        headers: testSessionHeaders('agent-1')
       }),
       fetch(`${baseUrl}/api/agent/tickets/${ticket.id}/claim`, {
         method: 'POST',
-        headers: { Cookie: 'frontdesk_session=agent-2' }
+        headers: testSessionHeaders('agent-2')
       })
     ]);
 

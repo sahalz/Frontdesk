@@ -4,6 +4,25 @@
  */
 
 const API_BASE = '';
+const sessionStorageKey = 'frontdesk.sessionId';
+
+function tabFetch(url, options = {}) {
+  const headers = new Headers(options.headers);
+  const sessionId = sessionStorage.getItem(sessionStorageKey);
+  if (sessionId) headers.set('X-Frontdesk-Session', sessionId);
+  return fetch(url, { ...options, headers });
+}
+
+// Opening a copy of a tab can copy sessionStorage. The original tab owns its session.
+async function claimTabSession(sessionId) {
+  if (!navigator.locks) return true;
+  return new Promise((resolve, reject) => {
+    navigator.locks.request('frontdesk-session-' + sessionId, { ifAvailable: true }, lock => {
+      resolve(Boolean(lock));
+      if (lock) return new Promise(() => {});
+    }).catch(reject);
+  });
+}
 
 let currentUser = null;
 const roleViews = {
@@ -47,6 +66,12 @@ updateIstClock();
 
 window.addEventListener('DOMContentLoaded', async () => {
   document.getElementById('signInForm').addEventListener('submit', signIn);
+  document.getElementById('signInRoles').addEventListener('change', () => {
+    document.getElementById('signInPassword').value = '';
+    document.getElementById('signInStatus').textContent = '';
+    updateSignInRole();
+  });
+  updateSignInRole();
   document.getElementById('customerSignupForm').addEventListener('submit', signUpCustomer);
   document.getElementById('showCustomerSignup').addEventListener('click', () => showSignup(true));
   document.getElementById('showSignIn').addEventListener('click', () => showSignup(false));
@@ -54,8 +79,17 @@ window.addEventListener('DOMContentLoaded', async () => {
   updateComposerStyle();
 
   try {
-    const response = await fetch('/api/session');
-    if (response.status === 401) return;
+    const sessionId = sessionStorage.getItem(sessionStorageKey);
+    if (!sessionId) return;
+    if (!await claimTabSession(sessionId)) {
+      sessionStorage.removeItem(sessionStorageKey);
+      return;
+    }
+    const response = await tabFetch('/api/session');
+    if (response.status === 401) {
+      sessionStorage.removeItem(sessionStorageKey);
+      return;
+    }
     const data = await response.json();
     if (!response.ok) throw new Error(data.error);
     await openPortal(data.user);
@@ -64,12 +98,25 @@ window.addEventListener('DOMContentLoaded', async () => {
   }
 });
 
+function selectedSignInRole() {
+  return document.querySelector('input[name="signInRole"]:checked').value;
+}
+
+function updateSignInRole() {
+  const role = selectedSignInRole();
+  const roleName = role[0].toUpperCase() + role.slice(1);
+  document.getElementById('signInHeading').textContent = roleName + ' sign in';
+  document.getElementById('showCustomerSignup').hidden = role !== 'customer';
+}
+
 function showSignup(show) {
   const signInForm = document.getElementById('signInForm');
   const signupForm = document.getElementById('customerSignupForm');
   signInForm.hidden = show;
   signupForm.hidden = !show;
-  document.getElementById('signInHeading').textContent = show ? 'Create customer account' : 'Sign in to Frontdesk';
+  document.getElementById('signInRoles').hidden = show;
+  if (show) document.getElementById('signInHeading').textContent = 'Create customer account';
+  else updateSignInRole();
   document.getElementById('signInStatus').textContent = '';
   document.getElementById('signupStatus').textContent = '';
   (show ? signInForm : signupForm).elements.password.value = '';
@@ -110,30 +157,41 @@ async function signIn(event) {
   const form = event.currentTarget;
   const button = form.querySelector('button');
   const status = document.getElementById('signInStatus');
+  const roles = document.getElementById('signInRoles');
+  const role = selectedSignInRole();
   button.disabled = true;
+  roles.disabled = true;
   status.textContent = '';
 
   try {
     const response = await fetch('/api/session', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ userId: form.elements.userId.value, password: form.elements.password.value })
+      body: JSON.stringify({
+        userId: form.elements.userId.value,
+        password: form.elements.password.value,
+        role
+      })
     });
     const data = await response.json();
     if (!response.ok) throw new Error(data.error);
+    sessionStorage.setItem(sessionStorageKey, data.sessionId);
+    await claimTabSession(data.sessionId);
     form.reset();
     await openPortal(data.user);
   } catch (error) {
     status.textContent = error.message;
   } finally {
     button.disabled = false;
+    roles.disabled = false;
   }
 }
 
 async function signOut() {
   try {
-    const response = await fetch('/api/session', { method: 'DELETE' });
+    const response = await tabFetch('/api/session', { method: 'DELETE' });
     if (!response.ok) throw new Error('Sign-out failed. Try again.');
+    sessionStorage.removeItem(sessionStorageKey);
     window.location.reload();
   } catch (error) {
     alert(error.message);
@@ -141,8 +199,11 @@ async function signOut() {
 }
 
 async function portalFetch(url, options) {
-  const response = await fetch(url, options);
-  if (response.status === 401) window.location.reload();
+  const response = await tabFetch(url, options);
+  if (response.status === 401) {
+    sessionStorage.removeItem(sessionStorageKey);
+    window.location.reload();
+  }
   return response;
 }
 

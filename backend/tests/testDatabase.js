@@ -8,14 +8,23 @@ const accountIds = new Map(['agent-1', 'agent-2', 'agent-3', 'mgr-1', 'cust-1', 
 
 export const testAuth = {
   signIn: async (email, password) => {
-    if (email !== 'cust-1@example.test' || password !== 'fixture-password') return { status: 400 };
+    const id = email.replace(/@example\.test$/, '');
+    if (!['cust-1', 'agent-1'].includes(id) || password !== 'fixture-password') return { status: 400 };
     return {
       status: 200,
-      data: { access_token: 'cust-1', expires_in: 3600, user: { id: accountIds.get('cust-1') } }
+      data: { access_token: id, expires_in: 3600, user: { id: accountIds.get(id) } }
     };
   },
   getUser: async token => ({ status: 200, data: { id: accountIds.get(token) } })
 };
+
+export function testSessionHeaders(userId) {
+  const sessionId = '10000000000000000000000000000001';
+  return {
+    Cookie: 'frontdesk_session_' + sessionId + '=' + userId,
+    'X-Frontdesk-Session': sessionId
+  };
+}
 
 export async function createTestDatabase() {
   const engine = new PGlite({

@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import { rateLimit } from 'express-rate-limit';
 import {
   endCustomerSession,
@@ -40,7 +41,7 @@ export function createSupabaseAuth({
   };
 }
 
-const cookieName = 'frontdesk_session';
+const cookiePrefix = 'frontdesk_session_';
 const cookieOptions = {
   httpOnly: true,
   sameSite: 'strict',
@@ -48,8 +49,18 @@ const cookieOptions = {
   path: '/api'
 };
 
-function getSessionToken(req) {
-  return req.get('Cookie')?.match(/(?:^|;\s*)frontdesk_session=([A-Za-z0-9._-]+)(?:;|$)/)?.[1];
+function readTabSession(req) {
+  const sessionId = req.get('X-Frontdesk-Session');
+  if (!/^[0-9a-f]{32}$/.test(sessionId || '')) return {};
+  const name = cookiePrefix + sessionId;
+  const token = req.get('Cookie')?.match(new RegExp('(?:^|;\\s*)' + name + '=([A-Za-z0-9._-]+)(?:;|$)'))?.[1];
+  return { name, token };
+}
+
+function sendSession(res, user, token, maxAge) {
+  const sessionId = randomBytes(16).toString('hex');
+  res.cookie(cookiePrefix + sessionId, token, { ...cookieOptions, maxAge });
+  return res.json({ user, sessionId });
 }
 
 export function configureAuth(app, db, auth) {
@@ -85,9 +96,13 @@ export function configureAuth(app, db, auth) {
   });
 
   app.post('/api/session', limitAttempts, async (req, res) => {
-    const { userId, password } = req.body || {};
+    const { userId, password, role } = req.body || {};
     if (typeof userId !== 'string' || !userId.trim() || typeof password !== 'string' || !password) {
       return res.status(400).json({ error: 'User ID and password are required.' });
+    }
+
+    if (role !== undefined && !['customer', 'agent', 'manager'].includes(role)) {
+      return res.status(400).json({ error: 'Choose Customer, Agent, or Manager.' });
     }
 
     const account = await db.prepare(
@@ -96,15 +111,16 @@ export function configureAuth(app, db, auth) {
        WHERE u.id = ?`
     ).get(userId.trim());
 
+    if (role !== undefined && account?.role !== role) {
+      return res.status(401).json({ error: 'Invalid user ID or password for the selected role.' });
+    }
+
     if (account?.password_hash && !account.auth_user_id) {
       if (password.length > 128) return res.status(401).json({ error: 'Invalid user ID or password.' });
       const session = await startCustomerSession(db, account, password);
       if (!session) return res.status(401).json({ error: 'Invalid user ID or password.' });
 
-      const previous = getSessionToken(req);
-      if (isCustomerToken(previous)) await endCustomerSession(db, previous);
-      res.cookie(cookieName, session.token, { ...cookieOptions, maxAge: session.maxAge });
-      return res.json({ user: session.user });
+      return sendSession(res, session.user, session.token, session.maxAge);
     }
 
     if (!account?.auth_user_id) {
@@ -119,22 +135,22 @@ export function configureAuth(app, db, auth) {
     }
 
     const user = await findUser(account.auth_user_id);
-    if (user?.id !== account.id) {
+    if (user?.id !== account.id || (role !== undefined && user.role !== role)) {
       return res.status(401).json({ error: 'Invalid user ID or password.' });
     }
 
-    res.cookie(cookieName, data.access_token, { ...cookieOptions, maxAge: data.expires_in * 1000 });
-    res.json({ user });
+    return sendSession(res, user, data.access_token, data.expires_in * 1000);
   });
 
   app.delete('/api/session', async (req, res) => {
-    const token = getSessionToken(req);
+    const { name, token } = readTabSession(req);
     if (isCustomerToken(token)) await endCustomerSession(db, token);
-    res.clearCookie(cookieName, cookieOptions).sendStatus(204);
+    if (name) res.clearCookie(name, cookieOptions);
+    res.sendStatus(204);
   });
 
   app.use('/api', async (req, res, next) => {
-    const token = getSessionToken(req);
+    const { token } = readTabSession(req);
     if (!token) return res.status(401).json({ error: 'Sign in to continue.' });
 
     if (isCustomerToken(token)) {

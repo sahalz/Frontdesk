@@ -32,7 +32,13 @@
   </header>
 
   <section id="signInPanel" class="card sign-in-panel" aria-labelledby="signInHeading">
-    <h2 id="signInHeading">Sign in to Frontdesk</h2>
+    <h2 id="signInHeading">Customer sign in</h2>
+    <fieldset id="signInRoles" class="sign-in-roles">
+      <legend class="visually-hidden">Sign-in role</legend>
+      <label><input type="radio" name="signInRole" value="customer" checked><span>Customer</span></label>
+      <label><input type="radio" name="signInRole" value="agent"><span>Agent</span></label>
+      <label><input type="radio" name="signInRole" value="manager"><span>Manager</span></label>
+    </fieldset>
     <form id="signInForm">
       <div class="form-group">
         <label for="signInUserId">User ID</label>

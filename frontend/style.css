@@ -127,6 +127,53 @@ body {
   margin-bottom: 1.25rem;
 }
 
+.sign-in-roles {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.25rem;
+  min-width: 0;
+  margin: 0 0 1.25rem;
+  padding: 0.25rem;
+  border: 1px solid #e2e8f0;
+  border-radius: var(--radius);
+  background: #f8fafc;
+}
+
+.sign-in-roles label {
+  position: relative;
+}
+
+.sign-in-roles input,
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: 0;
+  clip-path: inset(50%);
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.sign-in-roles span {
+  display: block;
+  padding: 0.5rem 0.25rem;
+  border-radius: var(--radius);
+  text-align: center;
+  font-size: 0.875rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.sign-in-roles input:checked + span {
+  background: #dbeafe;
+  color: #1e40af;
+}
+
+.sign-in-roles input:focus-visible + span {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
 #signInStatus:not(:empty),
 #signupStatus:not(:empty) {
   margin-top: 0.75rem;
