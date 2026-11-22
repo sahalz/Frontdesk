@@ -192,9 +192,14 @@ The automated test suite verifies:
 
 ---
 
-## 8. Out-of-Scope Items (Section 9)
+## 8. Work Not Completed Within the Allotted Time
 
-In accordance with **SRS Section 9 (Out of Scope)** and the 8-hour development budget:
-* **Email Integration**: Direct inbound/outbound email parsing (SMTP/IMAP) was excluded in favor of the customer web portal.
-* **External Notification Gateways**: SMS / WhatsApp / external webhook notifications were excluded in favor of real-time server tracking and manager breach reports.
-* **Advanced Analytics**: Replaced by manager KPI summary metrics and the late ticket breach report (FR-19).
+The eight-hour development budget went toward the core ticket workflow, SLA calculations, and role-based access. The following features were deferred, consistent with SRS Section 9.
+
+- **Email integration** was deferred because the customer portal already handles ticket submission and replies.
+- **SMS, WhatsApp, and webhook notifications** were deferred because agents and managers can track ticket status and SLA breaches in the app.
+- **Advanced analytics** were deferred because the manager dashboard covers the required summary metrics and late-ticket report (FR-19).
+
+## 9. Deployment Status
+
+Frontdesk is deployed on Render as a Node web service. It uses Supabase for PostgreSQL and staff authentication. The [Render Blueprint](render.yaml) defines the service and its health check.
